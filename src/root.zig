@@ -8,6 +8,7 @@ pub const constants = @import("constants.zig");
 pub const geometry = @import("geometry.zig");
 pub const molecule = @import("molecule.zig");
 pub const physics = @import("physics.zig");
+pub const mat4 = @import("mat4.zig");
 
 test {
     // Pull every module's tests into the `zig build test` run.
@@ -18,4 +19,5 @@ test {
     _ = geometry;
     _ = molecule;
     _ = physics;
+    _ = mat4;
 }
