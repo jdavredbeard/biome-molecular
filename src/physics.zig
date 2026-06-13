@@ -25,6 +25,66 @@ pub fn addSpringForces(mol: *const Molecule, c: Constants, forces: []Vec3) void 
     }
 }
 
+/// Accumulate harmonic angle forces. For each atom with >= 2 bonds, every pair
+/// of bonds (i, j) is pushed toward the atom's preferred angle. Forces are
+/// applied to the neighbor atoms perpendicular to each bond (per the design
+/// spec), with the reaction applied to the central atom so total momentum is
+/// conserved.
+pub fn addAngleForces(mol: *const Molecule, c: Constants, forces: []Vec3) void {
+    for (mol.atoms.items) |center| {
+        const n = center.bonds.len;
+        if (n < 2) continue;
+        const preferred = atom_mod.preferredAngle(center.atom_type);
+        const cpos = center.position;
+
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const ni = mol.bonds.items[center.bonds.get(i)].other(center.id);
+            const bond_i = mol.atoms.items[ni].position.sub(cpos);
+            const li2 = bond_i.lengthSq();
+            if (li2 < 1e-12) continue;
+
+            var j: usize = i + 1;
+            while (j < n) : (j += 1) {
+                const nj = mol.bonds.items[center.bonds.get(j)].other(center.id);
+                const bond_j = mol.atoms.items[nj].position.sub(cpos);
+                const lj2 = bond_j.lengthSq();
+                if (lj2 < 1e-12) continue;
+
+                const li = @sqrt(li2);
+                const lj = @sqrt(lj2);
+                const cos_a = std.math.clamp(bond_i.dot(bond_j) / (li * lj), -1.0, 1.0);
+                const angle = std.math.acos(cos_a);
+                const delta = angle - preferred;
+                // Positive magnitude => bonds should open (angle < preferred).
+                const magnitude = -c.k_angle * delta;
+
+                // In-plane unit vectors perpendicular to each bond, pointing
+                // toward the other bond (the angle-closing direction). Using a
+                // raw radial component (bond_i itself) is wrong: an angle force
+                // must be perpendicular to its own bond so it changes the angle
+                // rather than the bond length.
+                const cross_ij = bond_i.cross(bond_j);
+                if (cross_ij.lengthSq() < 1e-12) continue; // collinear: no torque axis
+                var perp_i = cross_ij.cross(bond_i).normalize();
+                var perp_j = bond_j.cross(cross_ij).normalize();
+
+                // To OPEN the angle (magnitude > 0) push neighbors away from the
+                // other bond, i.e. opposite the closing direction.
+                perp_i = perp_i.neg();
+                perp_j = perp_j.neg();
+
+                const fi = perp_i.scale(magnitude / li);
+                const fj = perp_j.scale(magnitude / lj);
+
+                forces[ni] = forces[ni].add(fi);
+                forces[nj] = forces[nj].add(fj);
+                forces[center.id] = forces[center.id].add(fi.add(fj).neg()); // reaction
+            }
+        }
+    }
+}
+
 test "spring: stretched bond pulls atoms together" {
     var mol = Molecule.init(std.testing.allocator);
     defer mol.deinit();
@@ -56,4 +116,55 @@ test "spring: compressed bond pushes atoms apart" {
     // F = 10*(0.5-1) = -5. Atom a pushed toward -Z, atom b toward +Z.
     try std.testing.expectApproxEqAbs(@as(f32, -5), forces[0].z, 1e-3);
     try std.testing.expectApproxEqAbs(@as(f32, 5), forces[1].z, 1e-3);
+}
+
+test "angle: forces on the three atoms sum to zero (momentum conserved)" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const center = try mol.addFirstAtom(.linear);
+    _ = try mol.addAtom(center, Vec3.init(1, 0, 0), .mono); // neighbor 1 at +X
+    _ = try mol.addAtom(center, Vec3.init(0, 1, 0), .mono); // neighbor 2 at +Y (90 deg, want 180)
+
+    var forces = [_]Vec3{Vec3.zero} ** 3;
+    addAngleForces(&mol, constants.default, &forces);
+
+    const total = forces[0].add(forces[1]).add(forces[2]);
+    try std.testing.expect(total.approxEq(Vec3.zero, 1e-4));
+}
+
+test "angle: a bent linear atom is pushed toward straight (angle increases)" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const center = try mol.addFirstAtom(.linear);
+    const n1 = try mol.addAtom(center, Vec3.init(1, 0, 0), .mono);
+    const n2 = try mol.addAtom(center, Vec3.init(0, 1, 0), .mono);
+
+    const before = math.angleBetween(
+        mol.atoms.items[n1].position.sub(mol.atoms.items[center].position),
+        mol.atoms.items[n2].position.sub(mol.atoms.items[center].position),
+    );
+
+    // Take one tiny explicit step using only angle forces.
+    var forces = [_]Vec3{Vec3.zero} ** 3;
+    addAngleForces(&mol, constants.default, &forces);
+    const h: f32 = 0.01;
+    for (mol.atoms.items, 0..) |*atom, i| atom.position = atom.position.add(forces[i].scale(h));
+
+    const after = math.angleBetween(
+        mol.atoms.items[n1].position.sub(mol.atoms.items[center].position),
+        mol.atoms.items[n2].position.sub(mol.atoms.items[center].position),
+    );
+    try std.testing.expect(after > before); // moving toward 180 degrees
+}
+
+test "angle: a single-bond atom contributes no angle force" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.linear);
+    _ = try mol.addAtom(a, Vec3.init(1, 0, 0), .mono);
+
+    var forces = [_]Vec3{Vec3.zero} ** 2;
+    addAngleForces(&mol, constants.default, &forces);
+    try std.testing.expect(forces[0].approxEq(Vec3.zero, 1e-6));
+    try std.testing.expect(forces[1].approxEq(Vec3.zero, 1e-6));
 }
