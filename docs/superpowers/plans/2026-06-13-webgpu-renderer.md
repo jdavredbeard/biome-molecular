@@ -1089,7 +1089,15 @@ git commit -m "feat: add ethane/branched/sheet examples and the registry"
 
 ---
 
-## Task 10: Acquire wgpu-native and confirm the C API (GPU SPIKE)
+> **PINNED wgpu-native FACTS (discovered in Task 10 — Tasks 11–16 MUST follow these, overriding any older API shape shown in the reference code below):**
+> - **Version:** `wgpu-native v29.0.0.0` (dep key `wgpu_native` in `build.zig.zon`), static `lib/libwgpu_native.a`, `linkSystemLibrary("wgpu_native")`.
+> - **Headers:** `addIncludePath(wgpu_dep.path("include"))`, then `@cInclude("webgpu/webgpu.h")` and `@cInclude("webgpu/wgpu.h")` — note `wgpu.h` is under `webgpu/`, NOT `include/wgpu.h`.
+> - **Strings:** label/descriptor string fields are `WGPUStringView { const char* data; size_t length; }`. For "no label" use `.{ .data = null, .length = 0 }`. There is NO `const char* label`.
+> - **Release:** use the `*Release` family (`wgpuInstanceRelease`, `wgpuTextureViewRelease`, `wgpuBufferRelease`, …), NOT `*Drop`.
+> - **Requests:** v29 uses the **callback-info** API — `wgpuInstanceRequestAdapter(instance, &options, callback_info)` and `wgpuAdapterRequestDevice(adapter, &desc, callback_info)` where `callback_info` is a `WGPURequestAdapterCallbackInfo`/`WGPURequestDeviceCallbackInfo` struct (fields: `.nextInChain`, `.mode = WGPUCallbackMode_AllowProcessEvents` (or `_WaitAnyOnly`), `.callback`, `.userdata1`, `.userdata2`). The callback signature takes `(status, adapter/device, WGPUStringView message, userdata1, userdata2)`. The old 4-arg `wgpuInstanceRequestAdapter(inst, &opts, cb, userdata)` form shown in the Task 11 reference does NOT exist in v29 — adapt to the callback-info struct, and if needed drive completion with `wgpuInstanceProcessEvents(instance)`. Let the compiler errors name the exact field/struct spellings.
+> - **Render pass begin:** the function is `wgpuCommandEncoderBeginRenderPass(encoder, &desc)` (the Task 11 reference's `wgpuRenderPassEncoderBegin` alternative does not apply here).
+
+## Task 10: Acquire wgpu-native and confirm the C API (GPU SPIKE) — DONE
 
 > From here on, tasks are GPU/interop: **no unit tests**, verify by building/running. Get this one fully working before writing any more GPU code — it pins the exact wgpu-native API everything else is written against.
 
