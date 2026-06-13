@@ -40,6 +40,12 @@ pub const Gpu = struct {
     atom_ibuf: c.WGPUBuffer = null,
     atom_count: u32 = 0,
 
+    cyl_vbuf: c.WGPUBuffer = null,
+    cyl_ibuf: c.WGPUBuffer = null,
+    cyl_index_count: u32 = 0,
+    bond_ibuf: c.WGPUBuffer = null,
+    bond_count: u32 = 0,
+
     pub fn init(window: win.Window) !Gpu {
         const instance = c.wgpuCreateInstance(null) orelse return error.NoInstance;
         const surface = window.createSurface(instance) orelse return error.NoSurface;
@@ -230,6 +236,18 @@ pub const Gpu = struct {
         self.atom_count = @intCast(instances.len);
     }
 
+    pub fn uploadCylinder(self: *Gpu, vertices: []const lib.mesh.Vertex, indices: []const u32) void {
+        self.cyl_vbuf = self.createBuffer(std.mem.sliceAsBytes(vertices), c.WGPUBufferUsage_Vertex);
+        self.cyl_ibuf = self.createBuffer(std.mem.sliceAsBytes(indices), c.WGPUBufferUsage_Index);
+        self.cyl_index_count = @intCast(indices.len);
+    }
+
+    pub fn uploadBonds(self: *Gpu, instances: []const lib.scene.Instance) void {
+        if (self.bond_ibuf != null) c.wgpuBufferRelease(self.bond_ibuf);
+        self.bond_ibuf = self.createBuffer(std.mem.sliceAsBytes(instances), c.WGPUBufferUsage_Vertex);
+        self.bond_count = @intCast(instances.len);
+    }
+
     pub fn setUniforms(self: *Gpu, view_proj: [16]f32, model_pre: [16]f32, light_dir: [3]f32, camera_pos: [3]f32) void {
         const u = Uniforms{
             .view_proj = view_proj,
@@ -277,13 +295,23 @@ pub const Gpu = struct {
             .depthStencilAttachment = &depth_att,
         }));
 
-        if (self.sphere_index_count > 0 and self.atom_count > 0) {
+        if (self.pipeline != null) {
             c.wgpuRenderPassEncoderSetPipeline(pass, self.pipeline);
             c.wgpuRenderPassEncoderSetBindGroup(pass, 0, self.bind_group, 0, null);
-            c.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, self.sphere_vbuf, 0, c.WGPU_WHOLE_SIZE);
-            c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.atom_ibuf, 0, c.WGPU_WHOLE_SIZE);
-            c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.sphere_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
-            c.wgpuRenderPassEncoderDrawIndexed(pass, self.sphere_index_count, self.atom_count, 0, 0, 0);
+
+            if (self.sphere_index_count > 0 and self.atom_count > 0) {
+                c.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, self.sphere_vbuf, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.atom_ibuf, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.sphere_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderDrawIndexed(pass, self.sphere_index_count, self.atom_count, 0, 0, 0);
+            }
+
+            if (self.cyl_index_count > 0 and self.bond_count > 0) {
+                c.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, self.cyl_vbuf, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.bond_ibuf, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.cyl_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderDrawIndexed(pass, self.cyl_index_count, self.bond_count, 0, 0, 0);
+            }
         }
 
         c.wgpuRenderPassEncoderEnd(pass);

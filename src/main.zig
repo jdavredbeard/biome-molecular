@@ -36,6 +36,14 @@ pub fn main() !void {
     defer allocator.free(atoms);
     gpu.uploadAtoms(atoms);
 
+    var cyl = try lib.mesh.cylinder(allocator, 16);
+    defer cyl.deinit(allocator);
+    gpu.uploadCylinder(cyl.vertices, cyl.indices);
+
+    const bonds = try lib.scene.bondInstances(allocator, &mol);
+    defer allocator.free(bonds);
+    gpu.uploadBonds(bonds);
+
     // Fixed camera framing the settled molecule; the molecule spins in place.
     const bounds = lib.camera.boundingSphere(&mol);
     const center = bounds.center;
