@@ -15,6 +15,7 @@ pub const camera = @import("render/camera.zig");
 pub const scene = @import("render/scene.zig");
 pub const examples = @import("examples.zig");
 pub const quaternion = @import("quaternion.zig");
+pub const navigation = @import("navigation.zig");
 
 test {
     // Pull every module's tests into the `zig build test` run.
@@ -32,4 +33,5 @@ test {
     _ = scene;
     _ = examples;
     _ = quaternion;
+    _ = navigation;
 }
