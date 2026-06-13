@@ -73,6 +73,27 @@ pub const Molecule = struct {
         const neighbor = b.other(from_atom);
         return self.atoms.items[neighbor].position.sub(self.atoms.items[from_atom].position).normalize();
     }
+
+    /// Recompute all open bond points across the molecule into `out`
+    /// (cleared first). IDs are assigned sequentially and are valid only
+    /// until the next recompute.
+    pub fn openBondPoints(self: *const Molecule, out: *std.ArrayList(OpenBondPoint)) !void {
+        out.clearRetainingCapacity();
+        var next_id: BondPointId = 0;
+        for (self.atoms.items) |a| {
+            // Gather unit directions of this atom's existing bonds.
+            var existing: std.BoundedArray(Vec3, 4) = .{};
+            for (a.bonds.slice()) |bond_id| {
+                existing.appendAssumeCapacity(self.bondDirection(a.id, bond_id));
+            }
+            var dirs: std.BoundedArray(Vec3, 4) = .{};
+            geometry.openDirections(a.atom_type, existing.slice(), &dirs);
+            for (dirs.slice()) |d| {
+                try out.append(.{ .parent_atom = a.id, .direction = d, .id = next_id });
+                next_id += 1;
+            }
+        }
+    }
 };
 
 test "addFirstAtom places a tetra at the origin with no bonds" {
@@ -116,4 +137,40 @@ test "bondDirection returns the unit vector from an atom to its bonded neighbor"
     const bond_id = mol.atoms.items[a].bonds.get(0);
     try std.testing.expect(mol.bondDirection(a, bond_id).approxEq(Vec3.init(0, 0, 1), 1e-5));
     try std.testing.expect(mol.bondDirection(b, bond_id).approxEq(Vec3.init(0, 0, -1), 1e-5));
+}
+
+test "openBondPoints: lone tetra exposes 4 open points" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    _ = try mol.addFirstAtom(.tetra);
+
+    var out = std.ArrayList(OpenBondPoint).init(std.testing.allocator);
+    defer out.deinit();
+    try mol.openBondPoints(&out);
+
+    try std.testing.expectEqual(@as(usize, 4), out.items.len);
+    for (out.items) |p| {
+        try std.testing.expectEqual(@as(AtomId, 0), p.parent_atom);
+        try std.testing.expectApproxEqAbs(@as(f32, 1), p.direction.length(), 1e-5);
+    }
+}
+
+test "openBondPoints: after one bond, parent exposes its remaining open points" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.tetra);
+    _ = try mol.addAtom(a, geometry.canonical(.tetra)[0], .mono); // mono caps -> no open points there
+
+    var out = std.ArrayList(OpenBondPoint).init(std.testing.allocator);
+    defer out.deinit();
+    try mol.openBondPoints(&out);
+
+    // Tetra parent now has 1 bond -> 3 open points; mono child has 0.
+    try std.testing.expectEqual(@as(usize, 3), out.items.len);
+    const want = atom_mod.preferredAngle(.tetra);
+    const used = geometry.canonical(.tetra)[0];
+    for (out.items) |p| {
+        try std.testing.expectEqual(@as(AtomId, a), p.parent_atom);
+        try std.testing.expectApproxEqAbs(want, math.angleBetween(used, p.direction), 1e-3);
+    }
 }
