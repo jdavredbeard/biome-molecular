@@ -44,6 +44,32 @@ pub fn build(b: *std.Build) void {
     // file path. In this case, we set up `exe_mod` to import `lib_mod`.
     exe_mod.addImport("biome_molecular_lib", lib_mod);
 
+    // --- Renderer native dependencies (macOS): wgpu-native + GLFW + frameworks ---
+    // Only the executable links these; the library/test modules stay dependency-free.
+    const wgpu_dep = b.dependency("wgpu_native", .{});
+    exe_mod.addIncludePath(wgpu_dep.path("include"));
+    exe_mod.addLibraryPath(wgpu_dep.path("lib"));
+    exe_mod.linkSystemLibrary("wgpu_native", .{});
+
+    const glfw_prefix = "/opt/homebrew/opt/glfw"; // `brew --prefix glfw`
+    exe_mod.addIncludePath(.{ .cwd_relative = glfw_prefix ++ "/include" });
+    exe_mod.addLibraryPath(.{ .cwd_relative = glfw_prefix ++ "/lib" });
+    exe_mod.linkSystemLibrary("glfw", .{});
+
+    // Objective-C glue that attaches a CAMetalLayer to the GLFW NSWindow.
+    exe_mod.addIncludePath(b.path("src/platform"));
+    exe_mod.addCSourceFile(.{
+        .file = b.path("src/platform/metal_layer.m"),
+        .flags = &.{ "-fobjc-arc", "-I" ++ glfw_prefix ++ "/include" },
+    });
+
+    exe_mod.linkFramework("Metal", .{});
+    exe_mod.linkFramework("QuartzCore", .{});
+    exe_mod.linkFramework("Cocoa", .{});
+    exe_mod.linkFramework("IOKit", .{});
+    exe_mod.linkFramework("Foundation", .{});
+    exe_mod.link_libc = true;
+
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
     // for actually invoking the compiler.

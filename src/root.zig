@@ -8,6 +8,12 @@ pub const constants = @import("constants.zig");
 pub const geometry = @import("geometry.zig");
 pub const molecule = @import("molecule.zig");
 pub const physics = @import("physics.zig");
+pub const mat4 = @import("mat4.zig");
+pub const mesh = @import("render/mesh.zig");
+pub const atom_style = @import("render/atom_style.zig");
+pub const camera = @import("render/camera.zig");
+pub const scene = @import("render/scene.zig");
+pub const examples = @import("examples.zig");
 
 test {
     // Pull every module's tests into the `zig build test` run.
@@ -18,4 +24,10 @@ test {
     _ = geometry;
     _ = molecule;
     _ = physics;
+    _ = mat4;
+    _ = mesh;
+    _ = atom_style;
+    _ = camera;
+    _ = scene;
+    _ = examples;
 }
