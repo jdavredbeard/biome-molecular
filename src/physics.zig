@@ -112,6 +112,63 @@ fn areBonded(mol: *const Molecule, a: atom_mod.AtomId, b: atom_mod.AtomId) bool 
     return false;
 }
 
+/// Number of integration substeps run per `simulate` call for stability.
+pub const substeps: usize = 4;
+
+/// Zero `forces`, then accumulate spring + angle + repulsion contributions.
+pub fn computeForces(mol: *const Molecule, c: Constants, forces: []Vec3) void {
+    for (forces) |*f| f.* = Vec3.zero;
+    addSpringForces(mol, c, forces);
+    addAngleForces(mol, c, forces);
+    addRepulsionForces(mol, c, forces);
+}
+
+/// Total kinetic energy assuming unit mass: sum of 0.5 * |v|^2.
+pub fn kineticEnergy(mol: *const Molecule) f32 {
+    var ke: f32 = 0;
+    for (mol.atoms.items) |a| ke += 0.5 * a.velocity.lengthSq();
+    return ke;
+}
+
+/// One integration substep: semi-implicit (symplectic) Euler with velocity
+/// damping. Unit mass, so acceleration == force.
+fn step(mol: *Molecule, c: Constants, dt: f32, forces: []Vec3) void {
+    computeForces(mol, c, forces);
+    for (mol.atoms.items, 0..) |*a, i| {
+        a.velocity = a.velocity.add(forces[i].scale(dt));
+        a.velocity = a.velocity.scale(c.damping);
+        a.position = a.position.add(a.velocity.scale(dt));
+    }
+}
+
+/// Advance the simulation by one frame (`substeps` substeps of `c.dt /
+/// substeps` each). Returns true once kinetic energy drops below the
+/// convergence threshold (the molecule is at rest).
+/// Advance the simulation by one frame (`substeps` substeps of `c.dt /
+/// substeps` each). Returns true once the molecule reaches equilibrium:
+/// both kinetic energy AND net force are below the convergence threshold.
+/// (Kinetic energy alone is insufficient — it dips to ~0 at every oscillation
+/// turning point, where the restoring force is still large, which would report
+/// "settled" mid-swing far from rest.)
+pub fn simulate(mol: *Molecule, c: Constants, allocator: std.mem.Allocator) !bool {
+    const forces = try allocator.alloc(Vec3, mol.atoms.items.len);
+    defer allocator.free(forces);
+    const sub_dt = c.dt / @as(f32, @floatFromInt(substeps));
+    var s: usize = 0;
+    while (s < substeps) : (s += 1) step(mol, c, sub_dt, forces);
+    // Re-evaluate forces at the final positions to test for true rest.
+    computeForces(mol, c, forces);
+    return kineticEnergy(mol) < c.convergence_threshold and netForceSq(forces) < c.convergence_threshold;
+}
+
+/// Sum of squared force magnitudes across all atoms (a scalar "how far from
+/// force equilibrium" measure).
+fn netForceSq(forces: []const Vec3) f32 {
+    var sum: f32 = 0;
+    for (forces) |f| sum += f.lengthSq();
+    return sum;
+}
+
 test "spring: stretched bond pulls atoms together" {
     var mol = Molecule.init(std.testing.allocator);
     defer mol.deinit();
@@ -234,4 +291,42 @@ test "repulsion: directly bonded atoms are excluded" {
     addRepulsionForces(&mol, constants.default, &forces);
     try std.testing.expect(forces[0].approxEq(Vec3.zero, 1e-6));
     try std.testing.expect(forces[1].approxEq(Vec3.zero, 1e-6));
+}
+
+test "computeForces aggregates spring + angle + repulsion" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.linear);
+    _ = try mol.addAtom(a, Vec3.init(0, 0, 1), .mono);
+    mol.atoms.items[1].position = Vec3.init(0, 0, 2); // stretched bond
+
+    var forces = [_]Vec3{Vec3.zero} ** 2;
+    computeForces(&mol, constants.default, &forces);
+    // At minimum the spring contribution must be present.
+    try std.testing.expect(@abs(forces[0].z) > 1e-3);
+}
+
+test "kineticEnergy sums 0.5*v^2 over atoms" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    _ = try mol.addFirstAtom(.mono);
+    mol.atoms.items[0].velocity = Vec3.init(0, 0, 2); // KE = 0.5 * 4 = 2
+    try std.testing.expectApproxEqAbs(@as(f32, 2), kineticEnergy(&mol), 1e-5);
+}
+
+test "simulate settles a stretched two-atom bond toward rest length" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.linear);
+    _ = try mol.addAtom(a, Vec3.init(0, 0, 1), .mono);
+    mol.atoms.items[1].position = Vec3.init(0, 0, 2); // stretched
+
+    var settled = false;
+    var iterations: usize = 0;
+    while (!settled and iterations < 5000) : (iterations += 1) {
+        settled = try simulate(&mol, constants.default, std.testing.allocator);
+    }
+    try std.testing.expect(settled);
+    const dist = mol.atoms.items[0].position.distance(mol.atoms.items[1].position);
+    try std.testing.expectApproxEqAbs(constants.default.rest_length, dist, 0.05);
 }
