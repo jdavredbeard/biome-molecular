@@ -82,6 +82,9 @@ pub fn main() !void {
     while (!window.shouldClose()) {
         window.pollEvents();
         if (window.keyPressed(win.KEY_ESCAPE)) break;
+        // Cmd-W closes the window (standard macOS shortcut).
+        const cmd_held = window.keyPressed(win.KEY_LEFT_SUPER) or window.keyPressed(win.KEY_RIGHT_SUPER);
+        if (cmd_held and window.keyPressed(win.KEY_W)) break;
 
         // Left/Right cycle examples (rising edge so one switch per press).
         const left = window.keyPressed(win.KEY_LEFT);

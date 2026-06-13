@@ -11,6 +11,9 @@ pub const c = @cImport({
 pub const KEY_LEFT = c.GLFW_KEY_LEFT;
 pub const KEY_RIGHT = c.GLFW_KEY_RIGHT;
 pub const KEY_ESCAPE = c.GLFW_KEY_ESCAPE;
+pub const KEY_W = c.GLFW_KEY_W;
+pub const KEY_LEFT_SUPER = c.GLFW_KEY_LEFT_SUPER;
+pub const KEY_RIGHT_SUPER = c.GLFW_KEY_RIGHT_SUPER;
 
 pub const Window = struct {
     handle: *c.GLFWwindow,
