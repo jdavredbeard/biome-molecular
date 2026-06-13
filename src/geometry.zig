@@ -91,11 +91,37 @@ fn alignWithDOF(cano: []const Vec3, e: Vec3, out: *std.BoundedArray(Vec3, 4)) vo
     for (cand.slice()) |v| out.appendAssumeCapacity(math.rodrigues(v, e, phi));
 }
 
-// Placeholder until Task 8; keeps the file compiling.
+/// Two-or-more-existing-bond case. The remaining directions are fully
+/// determined by the existing bonds and the type's geometry (closed forms
+/// derived from sum-to-zero / tetrahedral identities).
 fn openDirectionsMulti(t: AtomType, existing: []const Vec3, out: *std.BoundedArray(Vec3, 4)) void {
-    _ = t;
-    _ = existing;
-    _ = out;
+    switch (t) {
+        .mono, .linear => {}, // never reach here with m >= 2 (handled by m >= cano.len)
+        .trigonal => {
+            // 3 coplanar unit vectors sum to zero -> last = -(e0 + e1).
+            out.appendAssumeCapacity(existing[0].add(existing[1]).neg().normalize());
+        },
+        .tetra => {
+            if (existing.len == 2) {
+                // Regular-tetrahedron identity: the four unit vertices sum to
+                // zero and have pairwise dot -1/3. Given e0, e1:
+                //   u = e0 + e1, |u|^2 = 4/3
+                //   r0,r1 = -u/2 +/- w, where w = normalize(e0 x e1) * sqrt(2/3)
+                const e0 = existing[0];
+                const e1 = existing[1];
+                const u = e0.add(e1);
+                const half_neg = u.scale(-0.5);
+                const axis = e0.cross(e1).normalize();
+                const w = axis.scale(@sqrt(2.0 / 3.0));
+                out.appendAssumeCapacity(half_neg.add(w));
+                out.appendAssumeCapacity(half_neg.sub(w));
+            } else {
+                // 3 existing -> 4th vertex closes the sum to zero.
+                const s = existing[0].add(existing[1]).add(existing[2]);
+                out.appendAssumeCapacity(s.neg().normalize());
+            }
+        },
+    }
 }
 
 test "canonical direction counts match bond counts" {
@@ -171,4 +197,36 @@ test "openDirections: trigonal with 1 bond yields 2 coplanar dirs at 120 deg" {
     for (out.slice()) |d| {
         try std.testing.expectApproxEqAbs(want, math.angleBetween(e, d), 1e-3);
     }
+}
+
+test "openDirections: tetra with 2 bonds yields 2 dirs satisfying all angles" {
+    var out: std.BoundedArray(Vec3, 4) = .{};
+    const c = canonical(.tetra);
+    const e0 = c[0];
+    const e1 = c[1];
+    openDirections(.tetra, &.{ e0, e1 }, &out);
+    try std.testing.expectEqual(@as(usize, 2), out.len);
+    const want = atom.preferredAngle(.tetra);
+    for (out.slice()) |d| {
+        try std.testing.expectApproxEqAbs(@as(f32, 1), d.length(), 1e-4);
+        try std.testing.expectApproxEqAbs(want, math.angleBetween(e0, d), 1e-3);
+        try std.testing.expectApproxEqAbs(want, math.angleBetween(e1, d), 1e-3);
+    }
+    try std.testing.expectApproxEqAbs(want, math.angleBetween(out.get(0), out.get(1)), 1e-3);
+}
+
+test "openDirections: tetra with 3 bonds yields the 4th vertex" {
+    var out: std.BoundedArray(Vec3, 4) = .{};
+    const c = canonical(.tetra);
+    openDirections(.tetra, &.{ c[0], c[1], c[2] }, &out);
+    try std.testing.expectEqual(@as(usize, 1), out.len);
+    try std.testing.expect(out.get(0).approxEq(c[3], 1e-3));
+}
+
+test "openDirections: trigonal with 2 bonds yields the 3rd in-plane dir" {
+    var out: std.BoundedArray(Vec3, 4) = .{};
+    const c = canonical(.trigonal);
+    openDirections(.trigonal, &.{ c[0], c[1] }, &out);
+    try std.testing.expectEqual(@as(usize, 1), out.len);
+    try std.testing.expect(out.get(0).approxEq(c[2], 1e-3));
 }
