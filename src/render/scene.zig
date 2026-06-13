@@ -7,6 +7,7 @@ const atom_style = @import("atom_style.zig");
 
 pub const marker_offset: f32 = 0.6;
 pub const marker_radius: f32 = 0.12;
+pub const ghost_color = [3]f32{ 0.45, 0.45, 0.50 };
 const selected_scale: f32 = 1.6;
 const marker_color = [3]f32{ 0.40, 0.85, 0.90 };
 const selected_color = [3]f32{ 0.75, 1.0, 1.0 };
@@ -71,6 +72,30 @@ pub fn openPointInstances(allocator: std.mem.Allocator, mol: *const Molecule, se
         const color = if (is_sel) selected_color else marker_color;
         const model = Mat4.translation(pos).mul(Mat4.scale(Vec3.init(r, r, r)));
         out[i] = make(model, color);
+    }
+    return out;
+}
+
+/// Dim-grey marker instances for the open bond points belonging to `ghost_id`
+/// only (the placement preview's onward branch points). Uniform size/color.
+pub fn ghostMarkerInstances(allocator: std.mem.Allocator, mol: *const Molecule, ghost_id: usize) ![]Instance {
+    var pts = std.ArrayList(OpenBondPoint).init(allocator);
+    defer pts.deinit();
+    try mol.openBondPoints(&pts);
+
+    var count: usize = 0;
+    for (pts.items) |p| {
+        if (p.parent_atom == ghost_id) count += 1;
+    }
+    const out = try allocator.alloc(Instance, count);
+    var i: usize = 0;
+    for (pts.items) |p| {
+        if (p.parent_atom != ghost_id) continue;
+        const parent = mol.atoms.items[p.parent_atom].position;
+        const pos = parent.add(p.direction.scale(marker_offset));
+        const model = Mat4.translation(pos).mul(Mat4.scale(Vec3.init(marker_radius, marker_radius, marker_radius)));
+        out[i] = make(model, ghost_color);
+        i += 1;
     }
     return out;
 }
@@ -149,4 +174,20 @@ test "openPointInstances: one marker per open point, selected larger, offset pla
     const m0 = Mat4{ .m = insts[1].model };
     const center = m0.mulPoint(Vec3.zero);
     try std.testing.expectApproxEqAbs(marker_offset, center.length(), 1e-4);
+}
+
+test "ghostMarkerInstances: one grey marker per the ghost atom's open points" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.tetra);
+    const g = try mol.addAtom(a, Vec3.init(0, 0, 1), .tetra); // ghost tetra: 1 bond -> 3 open points
+
+    const insts = try ghostMarkerInstances(std.testing.allocator, &mol, g);
+    defer std.testing.allocator.free(insts);
+    try std.testing.expectEqual(@as(usize, 3), insts.len);
+    for (insts) |inst| {
+        try std.testing.expectEqual(ghost_color[0], inst.color[0]);
+        try std.testing.expectEqual(ghost_color[1], inst.color[1]);
+        try std.testing.expectEqual(ghost_color[2], inst.color[2]);
+    }
 }
