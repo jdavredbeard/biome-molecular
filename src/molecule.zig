@@ -61,6 +61,34 @@ pub const Molecule = struct {
         return new_id;
     }
 
+    /// Remove the most recently added atom and its bond(s). Intended for undoing
+    /// the last `addAtom` (e.g. a placement ghost): that atom's bonds are the
+    /// trailing entries of `bonds`, so they pop cleanly without invalidating
+    /// other bond ids. Asserts there is at least one atom.
+    pub fn removeLastAtom(self: *Molecule) void {
+        std.debug.assert(self.atoms.items.len > 0);
+        const last_index = self.atoms.items.len - 1;
+        const last = self.atoms.items[last_index];
+
+        // Detach each of this atom's bonds from the neighbor's bond list.
+        for (last.bonds.slice()) |bond_id| {
+            const neighbor = self.bonds.items[bond_id].other(last.id);
+            const nb = &self.atoms.items[neighbor].bonds;
+            var i: usize = 0;
+            while (i < nb.len) : (i += 1) {
+                if (nb.get(i) == bond_id) {
+                    _ = nb.swapRemove(i);
+                    break;
+                }
+            }
+        }
+
+        // Pop this atom's bonds (the trailing entries) and the atom itself.
+        var remaining = last.bonds.len;
+        while (remaining > 0) : (remaining -= 1) _ = self.bonds.pop();
+        _ = self.atoms.pop();
+    }
+
     pub fn centerOfMass(self: *const Molecule) Vec3 {
         if (self.atoms.items.len == 0) return Vec3.zero;
         var sum = Vec3.zero;
@@ -213,4 +241,29 @@ test "end-to-end: build a tetra+3 molecule, settle it, bonds reach rest length" 
         const d = mol.atoms.items[b.atom_a].position.distance(mol.atoms.items[b.atom_b].position);
         try std.testing.expectApproxEqAbs(constants.default.rest_length, d, 0.1);
     }
+}
+
+test "removeLastAtom undoes the last addAtom" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.tetra);
+    _ = try mol.addAtom(a, Vec3.init(0, 0, 1), .mono);
+    try std.testing.expectEqual(@as(usize, 2), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 1), mol.bonds.items.len);
+    try std.testing.expectEqual(@as(usize, 1), mol.atoms.items[a].bonds.len);
+
+    mol.removeLastAtom();
+
+    try std.testing.expectEqual(@as(usize, 1), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 0), mol.bonds.items.len);
+    try std.testing.expectEqual(@as(usize, 0), mol.atoms.items[a].bonds.len);
+}
+
+test "removeLastAtom on a lone first atom leaves it empty" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    _ = try mol.addFirstAtom(.tetra);
+    mol.removeLastAtom();
+    try std.testing.expectEqual(@as(usize, 0), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 0), mol.bonds.items.len);
 }
