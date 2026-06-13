@@ -2,7 +2,14 @@ const std = @import("std");
 const Vec3 = @import("../math.zig").Vec3;
 const Mat4 = @import("../mat4.zig").Mat4;
 const Molecule = @import("../molecule.zig").Molecule;
+const OpenBondPoint = @import("../molecule.zig").OpenBondPoint;
 const atom_style = @import("atom_style.zig");
+
+pub const marker_offset: f32 = 0.6;
+pub const marker_radius: f32 = 0.12;
+const selected_scale: f32 = 1.6;
+const marker_color = [3]f32{ 0.40, 0.85, 0.90 };
+const selected_color = [3]f32{ 0.75, 1.0, 1.0 };
 
 /// Per-instance GPU data: a model matrix and an RGBA color (w unused).
 /// `extern` for a stable layout matching the WGSL instance attributes.
@@ -43,6 +50,27 @@ pub fn bondInstances(allocator: std.mem.Allocator, mol: *const Molecule) ![]Inst
             .mul(rot)
             .mul(Mat4.scale(Vec3.init(atom_style.bond_radius, len, atom_style.bond_radius)));
         out[i] = make(model, atom_style.bond_color);
+    }
+    return out;
+}
+
+/// One marker instance per open bond point. The `selected` index is drawn
+/// larger (scaled by `selected_scale * pulse`) and brighter. Markers sit
+/// `marker_offset` out from their parent atom along the open direction.
+pub fn openPointInstances(allocator: std.mem.Allocator, mol: *const Molecule, selected: usize, pulse: f32) ![]Instance {
+    var pts = std.ArrayList(OpenBondPoint).init(allocator);
+    defer pts.deinit();
+    try mol.openBondPoints(&pts);
+
+    const out = try allocator.alloc(Instance, pts.items.len);
+    for (pts.items, 0..) |p, i| {
+        const parent = mol.atoms.items[p.parent_atom].position;
+        const pos = parent.add(p.direction.scale(marker_offset));
+        const is_sel = (i == selected);
+        const r = if (is_sel) marker_radius * selected_scale * pulse else marker_radius;
+        const color = if (is_sel) selected_color else marker_color;
+        const model = Mat4.translation(pos).mul(Mat4.scale(Vec3.init(r, r, r)));
+        out[i] = make(model, color);
     }
     return out;
 }
@@ -98,4 +126,27 @@ test "bondInstances: one per bond; cylinder endpoints map to the bonded atoms" {
     // Unit cylinder runs y in [0,1]; its endpoints must map to the two atoms.
     try std.testing.expect(m.mulPoint(Vec3.init(0, 0, 0)).approxEq(pa, 1e-4));
     try std.testing.expect(m.mulPoint(Vec3.init(0, 1, 0)).approxEq(pb, 1e-4));
+}
+
+fn scaleX(inst: Instance) f32 {
+    return Vec3.init(inst.model[0], inst.model[1], inst.model[2]).length();
+}
+
+test "openPointInstances: one marker per open point, selected larger, offset placement" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    _ = try mol.addFirstAtom(.tetra); // lone tetra at origin -> 4 open points
+
+    const insts = try openPointInstances(std.testing.allocator, &mol, 0, 1.0);
+    defer std.testing.allocator.free(insts);
+    try std.testing.expectEqual(@as(usize, 4), insts.len);
+
+    // Selected (index 0) is scaled larger than the others.
+    for (insts[1..]) |other| {
+        try std.testing.expect(scaleX(insts[0]) > scaleX(other));
+    }
+    // Each marker sits `marker_offset` from its parent (atom 0 at the origin).
+    const m0 = Mat4{ .m = insts[1].model };
+    const center = m0.mulPoint(Vec3.zero);
+    try std.testing.expectApproxEqAbs(marker_offset, center.length(), 1e-4);
 }
