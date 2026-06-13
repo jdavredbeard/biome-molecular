@@ -1,47 +1,17 @@
 const std = @import("std");
-const lib = @import("root.zig");
-const Vec3 = lib.math.Vec3;
-const Molecule = lib.molecule.Molecule;
-const OpenBondPoint = lib.molecule.OpenBondPoint;
-const constants = lib.constants;
+const win = @import("platform/window.zig");
+const Gpu = @import("render/gpu.zig").Gpu;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const window = try win.Window.create(1280, 800, "Biome: Molecular");
+    defer window.destroy();
 
-    var mol = Molecule.init(allocator);
-    defer mol.deinit();
+    var gpu = try Gpu.init(window);
 
-    const center = try mol.addFirstAtom(.tetra);
-
-    var open = std.ArrayList(OpenBondPoint).init(allocator);
-    defer open.deinit();
-
-    // Cap all four tetra bonds with mono atoms.
-    var i: usize = 0;
-    while (i < 4) : (i += 1) {
-        try mol.openBondPoints(&open);
-        var dir: ?Vec3 = null;
-        for (open.items) |p| {
-            if (p.parent_atom == center) {
-                dir = p.direction;
-                break;
-            }
-        }
-        if (dir) |d| _ = try mol.addAtom(center, d, .mono) else break;
-    }
-
-    var settled = false;
-    var frames: usize = 0;
-    while (!settled and frames < 100000) : (frames += 1) {
-        settled = try lib.physics.simulate(&mol, constants.default, allocator);
-    }
-
-    std.debug.print("settled after {d} frames\n", .{frames});
-    for (mol.atoms.items) |a| {
-        std.debug.print("atom {d} ({s}) pos=({d:.3}, {d:.3}, {d:.3})\n", .{
-            a.id, @tagName(a.atom_type), a.position.x, a.position.y, a.position.z,
-        });
+    while (!window.shouldClose()) {
+        window.pollEvents();
+        const size = window.framebufferSize();
+        if (size[0] != gpu.width or size[1] != gpu.height) gpu.resize(size[0], size[1]);
+        gpu.renderClear();
     }
 }
