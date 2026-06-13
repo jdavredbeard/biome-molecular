@@ -4,37 +4,18 @@ const Gpu = @import("render/gpu.zig").Gpu;
 const lib = @import("biome_molecular_lib");
 const Mat4 = lib.mat4.Mat4;
 const Vec3 = lib.math.Vec3;
+const Quaternion = lib.quaternion.Quaternion;
 const Molecule = lib.molecule.Molecule;
+const OpenBondPoint = lib.molecule.OpenBondPoint;
+const nav = lib.navigation;
 
 const light_dir = [3]f32{ -0.6, 0.7, 0.5 };
-const spin_rad_per_s: f32 = 0.6; // turntable speed (~10.5s per revolution)
+const slerp_ms: f32 = 300.0; // rotation animation duration
+const pulse_omega: f32 = 4.0; // selected-marker pulse speed (rad/s)
 
-const Camera = struct { center: Vec3, view: Mat4, eye: Vec3 };
-
-fn cameraFor(mol: *const Molecule) Camera {
-    const b = lib.camera.boundingSphere(mol);
-    return .{
-        .center = b.center,
-        .view = lib.camera.viewMatrix(b),
-        .eye = Vec3.init(b.center.x, b.center.y, b.center.z + lib.camera.cameraDistance(b.radius)),
-    };
-}
-
-/// Upload the selected example's instances, refit the camera, update the title.
-fn showExample(allocator: std.mem.Allocator, gpu: *Gpu, window: win.Window, molecules: []Molecule, idx: usize, cam: *Camera) !void {
-    const atoms = try lib.scene.atomInstances(allocator, &molecules[idx]);
-    defer allocator.free(atoms);
-    gpu.uploadAtoms(atoms);
-
-    const bonds = try lib.scene.bondInstances(allocator, &molecules[idx]);
-    defer allocator.free(bonds);
-    gpu.uploadBonds(bonds);
-
-    cam.* = cameraFor(&molecules[idx]);
-
-    var buf: [128]u8 = undefined;
-    const title = try std.fmt.bufPrintZ(&buf, "{s} ({d}/{d})", .{ lib.examples.all[idx].name, idx + 1, lib.examples.all.len });
-    window.setTitle(title.ptr);
+fn smoothstep(t: f32) f32 {
+    const c = std.math.clamp(t, 0.0, 1.0);
+    return c * c * (3.0 - 2.0 * c);
 }
 
 pub fn main() !void {
@@ -42,28 +23,22 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Build and physics-settle every example up front; switching is then instant.
-    const n = lib.examples.all.len;
-    var molecules: [n]Molecule = undefined;
-    var built: usize = 0;
-    defer for (molecules[0..built]) |*m| m.deinit();
-    for (lib.examples.all, 0..) |ex, i| {
-        molecules[i] = try ex.build(allocator);
-        built = i + 1;
-        var settled = false;
-        var it: usize = 0;
-        while (!settled and it < 20000) : (it += 1) {
-            settled = try lib.physics.simulate(&molecules[i], lib.constants.default, allocator);
-        }
-    }
+    // Sandbox starts with a single Tetra at the origin (4 open bond points).
+    var mol = Molecule.init(allocator);
+    defer mol.deinit();
+    _ = try mol.addFirstAtom(.tetra);
+
+    // Snapshot the open points once (static while we only navigate).
+    var open = std.ArrayList(OpenBondPoint).init(allocator);
+    defer open.deinit();
+    try mol.openBondPoints(&open);
+    const open_count = open.items.len;
 
     const window = try win.Window.create(1280, 800, "Biome: Molecular");
     defer window.destroy();
-
     var gpu = try Gpu.init(window);
     defer gpu.deinit();
 
-    // Shared meshes (uploaded once; instances change per example).
     var sphere = try lib.mesh.icosphere(allocator, 2);
     defer sphere.deinit(allocator);
     gpu.uploadSphere(sphere.vertices, sphere.indices);
@@ -72,35 +47,60 @@ pub fn main() !void {
     defer cyl.deinit(allocator);
     gpu.uploadCylinder(cyl.vertices, cyl.indices);
 
-    var current: usize = 0;
-    var cam = cameraFor(&molecules[current]);
-    try showExample(allocator, &gpu, window, molecules[0..], current, &cam);
+    const atoms = try lib.scene.atomInstances(allocator, &mol);
+    defer allocator.free(atoms);
+    gpu.uploadAtoms(atoms);
+
+    const bonds = try lib.scene.bondInstances(allocator, &mol);
+    defer allocator.free(bonds);
+    gpu.uploadBonds(bonds);
+
+    // Fixed camera framing the molecule + its markers.
+    const bounds = lib.camera.boundingSphere(&mol);
+    const center = bounds.center;
+    const radius = bounds.radius + lib.scene.marker_offset + lib.scene.marker_radius;
+    const eye = Vec3.init(center.x, center.y, center.z + lib.camera.cameraDistance(radius));
+    const view = Mat4.lookAt(eye, center, Vec3.init(0, 1, 0));
+
+    // Selection + orientation animation state.
+    var selected: usize = 0;
+    var q = if (open_count > 0) nav.targetOrientation(open.items[0].direction) else Quaternion.identity;
+    var q_start = q;
+    var q_target = q;
+    var anim_start = std.time.milliTimestamp();
+    var animating = false;
 
     var prev_left = false;
     var prev_right = false;
-    const start = std.time.milliTimestamp();
+    const epoch = std.time.milliTimestamp();
     while (!window.shouldClose()) {
         window.pollEvents();
         if (window.keyPressed(win.KEY_ESCAPE)) break;
-        // Cmd-W closes the window (standard macOS shortcut).
         const cmd_held = window.keyPressed(win.KEY_LEFT_SUPER) or window.keyPressed(win.KEY_RIGHT_SUPER);
         if (cmd_held and window.keyPressed(win.KEY_W)) break;
 
-        // Left/Right cycle examples (rising edge so one switch per press).
+        // Left/Right cycle the selection (rising edge); re-target the rotation.
         const left = window.keyPressed(win.KEY_LEFT);
         const right = window.keyPressed(win.KEY_RIGHT);
-        if (left and !prev_left) {
-            current = (current + n - 1) % n;
-            try showExample(allocator, &gpu, window, molecules[0..], current, &cam);
+        var changed = false;
+        if (open_count > 0 and left and !prev_left) {
+            selected = nav.cycle(selected, open_count, .prev);
+            changed = true;
         }
-        if (right and !prev_right) {
-            current = (current + 1) % n;
-            try showExample(allocator, &gpu, window, molecules[0..], current, &cam);
+        if (open_count > 0 and right and !prev_right) {
+            selected = nav.cycle(selected, open_count, .next);
+            changed = true;
         }
         prev_left = left;
         prev_right = right;
+        if (changed) {
+            q_start = q;
+            q_target = nav.targetOrientation(open.items[selected].direction);
+            anim_start = std.time.milliTimestamp();
+            animating = true;
+        }
 
-        // Pause rendering when hidden (avoids Metal drawable-pool exhaustion).
+        // Pause when hidden (avoids Metal drawable exhaustion).
         const size = window.framebufferSize();
         if (!window.visibleOnScreen() or size[0] == 0 or size[1] == 0) {
             std.time.sleep(16 * std.time.ns_per_ms);
@@ -108,17 +108,29 @@ pub fn main() !void {
         }
         if (size[0] != gpu.width or size[1] != gpu.height) gpu.resize(size[0], size[1]);
 
+        // Advance the slerp.
+        if (animating) {
+            const t = @as(f32, @floatFromInt(std.time.milliTimestamp() - anim_start)) / slerp_ms;
+            if (t >= 1.0) {
+                q = q_target;
+                animating = false;
+            } else {
+                q = q_start.slerp(q_target, smoothstep(t));
+            }
+        }
+
+        // Repack markers each frame so the selected one pulses.
+        const elapsed_s = @as(f32, @floatFromInt(std.time.milliTimestamp() - epoch)) / 1000.0;
+        const pulse = 1.0 + 0.15 * @sin(elapsed_s * pulse_omega);
+        const markers = try lib.scene.openPointInstances(allocator, &mol, selected, pulse);
+        defer allocator.free(markers);
+        gpu.uploadMarkers(markers);
+
         const aspect = @as(f32, @floatFromInt(gpu.width)) / @as(f32, @floatFromInt(gpu.height));
-        const view_proj = lib.camera.projectionMatrix(aspect).mul(cam.view);
+        const view_proj = lib.camera.projectionMatrix(aspect).mul(view);
+        const model_pre = Mat4.translation(center).mul(q.toMat4()).mul(Mat4.translation(center.neg()));
 
-        // Turntable: spin the molecule about its center in world space.
-        const elapsed_s = @as(f32, @floatFromInt(std.time.milliTimestamp() - start)) / 1000.0;
-        const angle = elapsed_s * spin_rad_per_s;
-        const spin = Mat4.translation(cam.center)
-            .mul(Mat4.fromAxisAngle(Vec3.init(0, 1, 0), angle))
-            .mul(Mat4.translation(cam.center.neg()));
-
-        gpu.setUniforms(view_proj.m, spin.m, light_dir, .{ cam.eye.x, cam.eye.y, cam.eye.z });
+        gpu.setUniforms(view_proj.m, model_pre.m, light_dir, .{ eye.x, eye.y, eye.z });
         gpu.renderFrame();
     }
 }
