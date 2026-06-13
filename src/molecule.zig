@@ -9,6 +9,7 @@ const bond_mod = @import("bond.zig");
 const Bond = bond_mod.Bond;
 const geometry = @import("geometry.zig");
 const constants = @import("constants.zig");
+const physics = @import("physics.zig");
 
 pub const BondPointId = usize;
 
@@ -172,5 +173,44 @@ test "openBondPoints: after one bond, parent exposes its remaining open points" 
     for (out.items) |p| {
         try std.testing.expectEqual(@as(AtomId, a), p.parent_atom);
         try std.testing.expectApproxEqAbs(want, math.angleBetween(used, p.direction), 1e-3);
+    }
+}
+
+test "end-to-end: build a tetra+3 molecule, settle it, bonds reach rest length" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const center = try mol.addFirstAtom(.tetra);
+
+    // Attach three mono caps along three of the tetra's open directions.
+    var open = std.ArrayList(OpenBondPoint).init(std.testing.allocator);
+    defer open.deinit();
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        try mol.openBondPoints(&open);
+        // Always grab an open point on the center atom.
+        var dir: Vec3 = undefined;
+        for (open.items) |p| {
+            if (p.parent_atom == center) {
+                dir = p.direction;
+                break;
+            }
+        }
+        _ = try mol.addAtom(center, dir, .mono);
+    }
+    try std.testing.expectEqual(@as(usize, 4), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 3), mol.bonds.items.len);
+
+    // Settle.
+    var settled = false;
+    var iters: usize = 0;
+    while (!settled and iters < 20000) : (iters += 1) {
+        settled = try physics.simulate(&mol, constants.default, std.testing.allocator);
+    }
+    try std.testing.expect(settled);
+
+    // Every bond should be near rest length, and no atoms overlapping.
+    for (mol.bonds.items) |b| {
+        const d = mol.atoms.items[b.atom_a].position.distance(mol.atoms.items[b.atom_b].position);
+        try std.testing.expectApproxEqAbs(constants.default.rest_length, d, 0.1);
     }
 }
