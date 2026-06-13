@@ -9,12 +9,15 @@ This repository currently contains:
 
 - **Headless core** — the data model (atoms, bonds, molecule), bond-point
   geometry, and the folding physics engine. Pure logic, fully unit-tested.
-- **Renderer** — a native macOS WebGPU renderer that displays settled molecules
-  as lit spheres (atoms) and cylinders (bonds), with a small library of example
-  molecules you can scroll through (a "turntable" example browser).
+- **Renderer** — a native macOS WebGPU renderer that draws molecules as lit
+  spheres (atoms) and cylinders (bonds).
+- **Sandbox navigation** — the app opens on a single Tetra at the origin with
+  its open bond points shown as markers. You cycle the selected point with the
+  arrow keys and the molecule rotates to bring it to face the camera.
 
-Navigation, atom placement, the radial menu, and puzzle mode are planned for
-future work and are not yet implemented.
+Atom placement, the radial menu, and puzzle mode are planned for future work and
+are not yet implemented. (The earlier example-browser was a renderer
+stepping-stone; its molecule builders remain as test fixtures in `examples.zig`.)
 
 ## Prerequisites
 
@@ -48,23 +51,14 @@ graphics dependencies.
 
 | Input | Action |
 |-------|--------|
-| **Left / Right arrows** | Switch to the previous / next example molecule (wraps around) |
+| **Left / Right arrows** | Select the previous / next open bond point; the molecule rotates to bring it to face the camera |
 | **Escape** or **Cmd-W** | Quit |
 | Window close button | Quit |
 
-The selected molecule's name and index (e.g. `Branched blob (5/6)`) is shown in
-the window title bar. Each molecule is physics-settled at startup and slowly
-rotates (a turntable) so you can see its shape from all sides; the camera
-auto-frames each one.
-
-## Example molecules
-
-1. **Methane** — a tetrahedral atom capped with four terminal atoms.
-2. **Linear chain** — six linear atoms in a row.
-3. **Trigonal star** — a trigonal atom with three terminal caps (flat triangle).
-4. **Ethane-like** — two tetrahedral atoms bonded, the rest capped.
-5. **Branched blob** — a tetrahedral center with four tetrahedral arms, all capped.
-6. **Trigonal sheet** — a trigonal center with three trigonal arms, all capped.
+The selected open bond point is shown as a larger, brighter, gently pulsing
+marker. The camera is fixed and frames the molecule; the molecule rotates
+(it doesn't orbit). Selecting a point slerps the molecule's orientation over
+~300 ms so the chosen point swings to the front.
 
 ## Project layout
 
