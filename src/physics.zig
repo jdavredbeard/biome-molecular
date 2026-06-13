@@ -142,9 +142,6 @@ fn step(mol: *Molecule, c: Constants, dt: f32, forces: []Vec3) void {
 }
 
 /// Advance the simulation by one frame (`substeps` substeps of `c.dt /
-/// substeps` each). Returns true once kinetic energy drops below the
-/// convergence threshold (the molecule is at rest).
-/// Advance the simulation by one frame (`substeps` substeps of `c.dt /
 /// substeps` each). Returns true once the molecule reaches equilibrium:
 /// both kinetic energy AND net force are below the convergence threshold.
 /// (Kinetic energy alone is insufficient — it dips to ~0 at every oscillation

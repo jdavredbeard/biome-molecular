@@ -94,6 +94,11 @@ fn alignWithDOF(cano: []const Vec3, e: Vec3, out: *std.BoundedArray(Vec3, 4)) vo
 /// Two-or-more-existing-bond case. The remaining directions are fully
 /// determined by the existing bonds and the type's geometry (closed forms
 /// derived from sum-to-zero / tetrahedral identities).
+///
+/// Precondition: the `existing` bond directions are assumed to already sit at
+/// the type's preferred angle to each other (as produced by placing atoms on
+/// open bond points). The closed forms only satisfy the angle invariant when
+/// this holds; arbitrary input directions yield geometrically meaningless dirs.
 fn openDirectionsMulti(t: AtomType, existing: []const Vec3, out: *std.BoundedArray(Vec3, 4)) void {
     switch (t) {
         .mono, .linear => {}, // never reach here with m >= 2 (handled by m >= cano.len)
