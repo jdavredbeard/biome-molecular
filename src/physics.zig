@@ -376,3 +376,67 @@ test "angle: a too-open angle is pushed closed (angle decreases)" {
     );
     try std.testing.expect(after < before); // moving toward 120 degrees
 }
+
+test "larger molecule: a perturbed linear chain settles back to a straight, rest-length chain" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+
+    // Build a straight 7-atom chain of linear atoms along +Z. Each interior
+    // atom prefers 180 deg and every bond prefers rest_length, so the straight
+    // chain starts exactly at equilibrium.
+    const n_atoms = 7;
+    var prev = try mol.addFirstAtom(.linear);
+    var k: usize = 1;
+    while (k < n_atoms) : (k += 1) {
+        prev = try mol.addAtom(prev, Vec3.init(0, 0, 1), .linear);
+    }
+    try std.testing.expectEqual(@as(usize, n_atoms), mol.atoms.items.len);
+
+    // Kink every atom off-equilibrium with a deterministic sideways offset, so
+    // springs, angle forces, and their cross-atom interactions must all act to
+    // recover. (Deterministic, not random, so the test is reproducible.)
+    for (mol.atoms.items, 0..) |*atom, i| {
+        const fi: f32 = @floatFromInt(i);
+        atom.position = atom.position.add(Vec3.init(0.25 * @sin(fi), 0.18 * @cos(fi * 1.3), 0));
+    }
+
+    // Center of mass right after the kick. All forces are internal and sum to
+    // zero, and initial velocities are zero, so the COM must not move while
+    // settling — momentum conservation across the whole interacting system.
+    const com_before = mol.centerOfMass();
+
+    var settled = false;
+    var iters: usize = 0;
+    while (!settled and iters < 100000) : (iters += 1) {
+        settled = try simulate(&mol, constants.default, std.testing.allocator);
+    }
+    try std.testing.expect(settled);
+
+    // Every bond relaxes back to ~rest_length.
+    for (mol.bonds.items) |b| {
+        const d = mol.atoms.items[b.atom_a].position.distance(mol.atoms.items[b.atom_b].position);
+        try std.testing.expectApproxEqAbs(constants.default.rest_length, d, 0.05);
+    }
+
+    // Every interior atom relaxes back toward straight (~180 deg).
+    for (mol.atoms.items) |atom| {
+        if (atom.bonds.len < 2) continue;
+        const na = mol.bonds.items[atom.bonds.get(0)].other(atom.id);
+        const nb = mol.bonds.items[atom.bonds.get(1)].other(atom.id);
+        const ang = math.angleBetween(
+            mol.atoms.items[na].position.sub(atom.position),
+            mol.atoms.items[nb].position.sub(atom.position),
+        );
+        try std.testing.expectApproxEqAbs(std.math.pi, ang, 0.1);
+    }
+
+    // Momentum conservation: settling must not drift the center of mass.
+    try std.testing.expect(mol.centerOfMass().approxEq(com_before, 1e-2));
+
+    // No NaNs / blow-ups anywhere.
+    for (mol.atoms.items) |atom| {
+        try std.testing.expect(std.math.isFinite(atom.position.x));
+        try std.testing.expect(std.math.isFinite(atom.position.y));
+        try std.testing.expect(std.math.isFinite(atom.position.z));
+    }
+}
