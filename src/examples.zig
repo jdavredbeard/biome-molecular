@@ -49,6 +49,69 @@ pub fn buildTrigonalStar(allocator: std.mem.Allocator) !Molecule {
     return mol;
 }
 
+pub fn buildEthane(allocator: std.mem.Allocator) !Molecule {
+    var mol = Molecule.init(allocator);
+    errdefer mol.deinit();
+    const c0 = try mol.addFirstAtom(.tetra);
+    var scratch = std.ArrayList(OpenBondPoint).init(allocator);
+    defer scratch.deinit();
+    const c1 = try addOnOpenPoint(&mol, &scratch, c0, .tetra); // tetra-tetra bond
+    // Cap the 3 remaining open points on each tetra with mono.
+    var i: usize = 0;
+    while (i < 3) : (i += 1) _ = try addOnOpenPoint(&mol, &scratch, c0, .mono);
+    i = 0;
+    while (i < 3) : (i += 1) _ = try addOnOpenPoint(&mol, &scratch, c1, .mono);
+    return mol;
+}
+
+pub fn buildBranchedBlob(allocator: std.mem.Allocator) !Molecule {
+    var mol = Molecule.init(allocator);
+    errdefer mol.deinit();
+    const center = try mol.addFirstAtom(.tetra);
+    var scratch = std.ArrayList(OpenBondPoint).init(allocator);
+    defer scratch.deinit();
+    var arms: [4]usize = undefined;
+    var i: usize = 0;
+    while (i < 4) : (i += 1) arms[i] = try addOnOpenPoint(&mol, &scratch, center, .tetra);
+    // Cap each arm's 3 remaining points with mono.
+    for (arms) |arm| {
+        var j: usize = 0;
+        while (j < 3) : (j += 1) _ = try addOnOpenPoint(&mol, &scratch, arm, .mono);
+    }
+    return mol;
+}
+
+pub fn buildTrigonalSheet(allocator: std.mem.Allocator) !Molecule {
+    var mol = Molecule.init(allocator);
+    errdefer mol.deinit();
+    const center = try mol.addFirstAtom(.trigonal);
+    var scratch = std.ArrayList(OpenBondPoint).init(allocator);
+    defer scratch.deinit();
+    var arms: [3]usize = undefined;
+    var i: usize = 0;
+    while (i < 3) : (i += 1) arms[i] = try addOnOpenPoint(&mol, &scratch, center, .trigonal);
+    // Each outer trigonal has 2 remaining open points -> cap with mono.
+    for (arms) |arm| {
+        var j: usize = 0;
+        while (j < 2) : (j += 1) _ = try addOnOpenPoint(&mol, &scratch, arm, .mono);
+    }
+    return mol;
+}
+
+pub const Example = struct {
+    name: []const u8,
+    build: *const fn (std.mem.Allocator) anyerror!Molecule,
+};
+
+pub const all = [_]Example{
+    .{ .name = "Methane", .build = buildMethane },
+    .{ .name = "Linear chain", .build = buildChain },
+    .{ .name = "Trigonal star", .build = buildTrigonalStar },
+    .{ .name = "Ethane-like", .build = buildEthane },
+    .{ .name = "Branched blob", .build = buildBranchedBlob },
+    .{ .name = "Trigonal sheet", .build = buildTrigonalSheet },
+};
+
 test "methane: 1 tetra + 4 mono caps, 4 bonds" {
     var mol = try buildMethane(std.testing.allocator);
     defer mol.deinit();
@@ -68,4 +131,42 @@ test "trigonal star: 1 trigonal + 3 mono, 3 bonds" {
     defer mol.deinit();
     try std.testing.expectEqual(@as(usize, 4), mol.atoms.items.len);
     try std.testing.expectEqual(@as(usize, 3), mol.bonds.items.len);
+}
+
+test "ethane-like: two tetra + 6 mono caps = 8 atoms, 7 bonds" {
+    var mol = try buildEthane(std.testing.allocator);
+    defer mol.deinit();
+    try std.testing.expectEqual(@as(usize, 8), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 7), mol.bonds.items.len);
+}
+
+test "branched blob: tetra + 4 tetra + 12 mono caps = 17 atoms, 16 bonds" {
+    var mol = try buildBranchedBlob(std.testing.allocator);
+    defer mol.deinit();
+    try std.testing.expectEqual(@as(usize, 17), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 16), mol.bonds.items.len);
+}
+
+test "trigonal sheet: trigonal + 3 trigonal + 6 mono caps = 10 atoms, 9 bonds" {
+    var mol = try buildTrigonalSheet(std.testing.allocator);
+    defer mol.deinit();
+    try std.testing.expectEqual(@as(usize, 10), mol.atoms.items.len);
+    try std.testing.expectEqual(@as(usize, 9), mol.bonds.items.len);
+}
+
+test "registry lists every example and each builds + settles" {
+    const physics = @import("physics.zig");
+    const constants = @import("constants.zig");
+    try std.testing.expect(all.len == 6);
+    for (all) |ex| {
+        var mol = try ex.build(std.testing.allocator);
+        defer mol.deinit();
+        try std.testing.expect(mol.atoms.items.len >= 1);
+        var settled = false;
+        var iters: usize = 0;
+        while (!settled and iters < 20000) : (iters += 1) {
+            settled = try physics.simulate(&mol, constants.default, std.testing.allocator);
+        }
+        try std.testing.expect(settled);
+    }
 }
