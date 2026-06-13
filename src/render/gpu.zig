@@ -95,7 +95,7 @@ pub const Gpu = struct {
             .depthSlice = c.WGPU_DEPTH_SLICE_UNDEFINED,
             .loadOp = c.WGPULoadOp_Clear,
             .storeOp = c.WGPUStoreOp_Store,
-            .clearValue = c.WGPUColor{ .r = 0.04, .g = 0.04, .b = 0.06, .a = 1.0 },
+            .clearValue = c.WGPUColor{ .r = 0.09, .g = 0.10, .b = 0.14, .a = 1.0 },
         });
         const pass_desc = std.mem.zeroInit(c.WGPURenderPassDescriptor, .{
             .colorAttachmentCount = @as(usize, 1),
