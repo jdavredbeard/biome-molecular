@@ -53,7 +53,15 @@ pub fn main() !void {
     const start = std.time.milliTimestamp();
     while (!window.shouldClose()) {
         window.pollEvents();
+
+        // Skip rendering when the window isn't visible on screen (occluded,
+        // minimized, or zero-sized). Presenting into a hidden Metal layer
+        // exhausts the drawable pool and hangs the app.
         const size = window.framebufferSize();
+        if (!window.visibleOnScreen() or size[0] == 0 or size[1] == 0) {
+            std.time.sleep(16 * std.time.ns_per_ms);
+            continue;
+        }
         if (size[0] != gpu.width or size[1] != gpu.height) gpu.resize(size[0], size[1]);
 
         const aspect = @as(f32, @floatFromInt(gpu.width)) / @as(f32, @floatFromInt(gpu.height));

@@ -38,11 +38,18 @@ fn vs_main(in : VsIn) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-    // Flat directional shade for now (3-point lighting comes in Task 14).
     let n = normalize(in.world_normal);
-    let l = normalize(u.light_dir.xyz);
-    let diffuse = max(dot(n, l), 0.0);
-    let ambient = 0.2;
-    let shade = ambient + diffuse * 0.8;
-    return vec4<f32>(in.color * shade, 1.0);
+
+    // Three directional lights (world space), matching the design spec.
+    let key_dir  = normalize(vec3<f32>(-0.6,  0.7, 0.5));  // warm, upper-left
+    let fill_dir = normalize(vec3<f32>( 0.6, -0.4, 0.5));  // cool, lower-right
+    let rim_dir  = normalize(vec3<f32>( 0.0,  0.2, -1.0)); // behind
+
+    let key  = max(dot(n, key_dir), 0.0)  * vec3<f32>(1.0, 0.95, 0.85) * 0.9;
+    let fill = max(dot(n, fill_dir), 0.0) * vec3<f32>(0.7, 0.8, 1.0)  * 0.35;
+    let rim  = pow(max(dot(n, rim_dir), 0.0), 2.0) * vec3<f32>(0.6, 0.7, 1.0) * 0.6;
+    let ambient = vec3<f32>(0.12, 0.12, 0.15);
+
+    let lit = in.color * (ambient + key + fill) + rim;
+    return vec4<f32>(lit, 1.0);
 }

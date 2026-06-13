@@ -271,6 +271,25 @@ pub const Gpu = struct {
     pub fn renderFrame(self: *Gpu) void {
         var st: c.WGPUSurfaceTexture = std.mem.zeroes(c.WGPUSurfaceTexture);
         c.wgpuSurfaceGetCurrentTexture(self.surface, &st);
+        switch (st.status) {
+            c.WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal,
+            c.WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal,
+            => {},
+            // The surface went stale (window occluded/backgrounded/resized).
+            // Reconfigure and skip this frame so we recover when shown again.
+            c.WGPUSurfaceGetCurrentTextureStatus_Timeout,
+            c.WGPUSurfaceGetCurrentTextureStatus_Outdated,
+            c.WGPUSurfaceGetCurrentTextureStatus_Lost,
+            => {
+                if (st.texture != null) c.wgpuTextureRelease(st.texture);
+                self.configureSurface();
+                return;
+            },
+            else => {
+                if (st.texture != null) c.wgpuTextureRelease(st.texture);
+                return;
+            },
+        }
         if (st.texture == null) return;
 
         const view = c.wgpuTextureCreateView(st.texture, null);

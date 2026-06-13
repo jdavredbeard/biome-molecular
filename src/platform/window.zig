@@ -35,6 +35,17 @@ pub const Window = struct {
         return c.glfwGetKey(self.handle, key) == c.GLFW_PRESS;
     }
 
+    pub fn iconified(self: Window) bool {
+        return c.glfwGetWindowAttrib(self.handle, c.GLFW_ICONIFIED) != 0;
+    }
+
+    /// True if any part of the window is currently visible on screen. When
+    /// false (occluded/minimized/hidden) we must not render — presenting into a
+    /// hidden Metal layer exhausts the drawable pool and hangs the app.
+    pub fn visibleOnScreen(self: Window) bool {
+        return c.biome_window_is_visible(@ptrCast(self.handle)) != 0;
+    }
+
     pub fn setTitle(self: Window, title: [*:0]const u8) void {
         c.glfwSetWindowTitle(self.handle, title);
     }
