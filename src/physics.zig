@@ -327,3 +327,52 @@ test "simulate settles a stretched two-atom bond toward rest length" {
     const dist = mol.atoms.items[0].position.distance(mol.atoms.items[1].position);
     try std.testing.expectApproxEqAbs(constants.default.rest_length, dist, 0.05);
 }
+
+test "angle: force on each neighbor is perpendicular to its own bond (no length change)" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const center = try mol.addFirstAtom(.linear);
+    const n1 = try mol.addAtom(center, Vec3.init(1, 0, 0), .mono);
+    const n2 = try mol.addAtom(center, Vec3.init(0, 1, 0), .mono); // 90 deg, wants 180
+
+    var forces = [_]Vec3{Vec3.zero} ** 3;
+    addAngleForces(&mol, constants.default, &forces);
+
+    const bond_1 = mol.atoms.items[n1].position.sub(mol.atoms.items[center].position);
+    const bond_2 = mol.atoms.items[n2].position.sub(mol.atoms.items[center].position);
+    // A force perpendicular to its own bond changes the angle, not the bond
+    // length: force . bond == 0 (to first order, no stretch/compression).
+    try std.testing.expectApproxEqAbs(@as(f32, 0), forces[n1].dot(bond_1), 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), forces[n2].dot(bond_2), 1e-5);
+    // Guard against a vacuous pass: the forces must be non-trivial.
+    try std.testing.expect(forces[n1].length() > 1e-3);
+    try std.testing.expect(forces[n2].length() > 1e-3);
+}
+
+test "angle: a too-open angle is pushed closed (angle decreases)" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const center = try mol.addFirstAtom(.trigonal); // prefers 120 deg
+    // Two bonds 170 deg apart (too open): +/- 85 deg from +Z in the XZ plane.
+    const s = @sin(85.0 * std.math.pi / 180.0);
+    const c = @cos(85.0 * std.math.pi / 180.0);
+    const n1 = try mol.addAtom(center, Vec3.init(s, 0, c), .mono);
+    const n2 = try mol.addAtom(center, Vec3.init(-s, 0, c), .mono);
+
+    const before = math.angleBetween(
+        mol.atoms.items[n1].position.sub(mol.atoms.items[center].position),
+        mol.atoms.items[n2].position.sub(mol.atoms.items[center].position),
+    );
+
+    // Take one tiny explicit step using only angle forces.
+    var forces = [_]Vec3{Vec3.zero} ** 3;
+    addAngleForces(&mol, constants.default, &forces);
+    const h: f32 = 0.01;
+    for (mol.atoms.items, 0..) |*atom, i| atom.position = atom.position.add(forces[i].scale(h));
+
+    const after = math.angleBetween(
+        mol.atoms.items[n1].position.sub(mol.atoms.items[center].position),
+        mol.atoms.items[n2].position.sub(mol.atoms.items[center].position),
+    );
+    try std.testing.expect(after < before); // moving toward 120 degrees
+}
