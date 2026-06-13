@@ -14,6 +14,7 @@ pub const atom_style = @import("render/atom_style.zig");
 pub const camera = @import("render/camera.zig");
 pub const scene = @import("render/scene.zig");
 pub const examples = @import("examples.zig");
+pub const quaternion = @import("quaternion.zig");
 
 test {
     // Pull every module's tests into the `zig build test` run.
@@ -30,4 +31,5 @@ test {
     _ = camera;
     _ = scene;
     _ = examples;
+    _ = quaternion;
 }
