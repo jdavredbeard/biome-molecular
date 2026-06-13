@@ -85,6 +85,33 @@ pub fn addAngleForces(mol: *const Molecule, c: Constants, forces: []Vec3) void {
     }
 }
 
+/// Accumulate steric repulsion between non-bonded atom pairs closer than
+/// `repulsion_threshold`. F = k_repel / dist^2, directed apart.
+pub fn addRepulsionForces(mol: *const Molecule, c: Constants, forces: []Vec3) void {
+    const atoms = mol.atoms.items;
+    var i: usize = 0;
+    while (i < atoms.len) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < atoms.len) : (j += 1) {
+            if (areBonded(mol, atoms[i].id, atoms[j].id)) continue;
+            const delta = atoms[j].position.sub(atoms[i].position);
+            const dist = delta.length();
+            if (dist >= c.repulsion_threshold or dist < 1e-6) continue;
+            const dir = delta.scale(1.0 / dist);
+            const f = c.k_repel / (dist * dist);
+            forces[atoms[i].id] = forces[atoms[i].id].add(dir.scale(-f));
+            forces[atoms[j].id] = forces[atoms[j].id].add(dir.scale(f));
+        }
+    }
+}
+
+fn areBonded(mol: *const Molecule, a: atom_mod.AtomId, b: atom_mod.AtomId) bool {
+    for (mol.atoms.items[a].bonds.slice()) |bond_id| {
+        if (mol.bonds.items[bond_id].other(a) == b) return true;
+    }
+    return false;
+}
+
 test "spring: stretched bond pulls atoms together" {
     var mol = Molecule.init(std.testing.allocator);
     defer mol.deinit();
@@ -165,6 +192,46 @@ test "angle: a single-bond atom contributes no angle force" {
 
     var forces = [_]Vec3{Vec3.zero} ** 2;
     addAngleForces(&mol, constants.default, &forces);
+    try std.testing.expect(forces[0].approxEq(Vec3.zero, 1e-6));
+    try std.testing.expect(forces[1].approxEq(Vec3.zero, 1e-6));
+}
+
+test "repulsion: close non-bonded atoms push apart" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    // Two unbonded atoms 0.5 apart along Z (< repulsion_threshold 0.8).
+    _ = try mol.addFirstAtom(.mono);
+    try mol.atoms.append(.{ .position = Vec3.init(0, 0, 0.5), .atom_type = .mono, .id = 1 });
+
+    var forces = [_]Vec3{Vec3.zero} ** 2;
+    addRepulsionForces(&mol, constants.default, &forces);
+
+    // F = k_repel / dist^2 = 2 / 0.25 = 8. Atom 0 toward -Z, atom 1 toward +Z.
+    try std.testing.expectApproxEqAbs(@as(f32, -8), forces[0].z, 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), forces[1].z, 1e-3);
+}
+
+test "repulsion: atoms beyond the threshold feel nothing" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    _ = try mol.addFirstAtom(.mono);
+    try mol.atoms.append(.{ .position = Vec3.init(0, 0, 1.5), .atom_type = .mono, .id = 1 });
+
+    var forces = [_]Vec3{Vec3.zero} ** 2;
+    addRepulsionForces(&mol, constants.default, &forces);
+    try std.testing.expect(forces[0].approxEq(Vec3.zero, 1e-6));
+    try std.testing.expect(forces[1].approxEq(Vec3.zero, 1e-6));
+}
+
+test "repulsion: directly bonded atoms are excluded" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.linear);
+    _ = try mol.addAtom(a, Vec3.init(0, 0, 1), .mono); // bonded, dist 1.0 anyway
+    mol.atoms.items[1].position = Vec3.init(0, 0, 0.5); // pull within threshold
+
+    var forces = [_]Vec3{Vec3.zero} ** 2;
+    addRepulsionForces(&mol, constants.default, &forces);
     try std.testing.expect(forces[0].approxEq(Vec3.zero, 1e-6));
     try std.testing.expect(forces[1].approxEq(Vec3.zero, 1e-6));
 }
