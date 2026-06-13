@@ -61,6 +61,7 @@ pub fn main() !void {
     defer window.destroy();
 
     var gpu = try Gpu.init(window);
+    defer gpu.deinit();
 
     // Shared meshes (uploaded once; instances change per example).
     var sphere = try lib.mesh.icosphere(allocator, 2);

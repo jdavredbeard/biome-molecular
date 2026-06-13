@@ -94,6 +94,26 @@ pub const Gpu = struct {
         return gpu;
     }
 
+    /// Release all GPU resources, in reverse order of creation.
+    pub fn deinit(self: *Gpu) void {
+        if (self.bond_ibuf != null) c.wgpuBufferRelease(self.bond_ibuf);
+        if (self.cyl_ibuf != null) c.wgpuBufferRelease(self.cyl_ibuf);
+        if (self.cyl_vbuf != null) c.wgpuBufferRelease(self.cyl_vbuf);
+        if (self.atom_ibuf != null) c.wgpuBufferRelease(self.atom_ibuf);
+        if (self.sphere_ibuf != null) c.wgpuBufferRelease(self.sphere_ibuf);
+        if (self.sphere_vbuf != null) c.wgpuBufferRelease(self.sphere_vbuf);
+        if (self.bind_group != null) c.wgpuBindGroupRelease(self.bind_group);
+        if (self.uniform_buffer != null) c.wgpuBufferRelease(self.uniform_buffer);
+        if (self.pipeline != null) c.wgpuRenderPipelineRelease(self.pipeline);
+        if (self.depth_view != null) c.wgpuTextureViewRelease(self.depth_view);
+        if (self.depth_texture != null) c.wgpuTextureRelease(self.depth_texture);
+        c.wgpuQueueRelease(self.queue);
+        c.wgpuDeviceRelease(self.device);
+        c.wgpuAdapterRelease(self.adapter);
+        c.wgpuSurfaceRelease(self.surface);
+        c.wgpuInstanceRelease(self.instance);
+    }
+
     fn configureSurface(self: *Gpu) void {
         const config = std.mem.zeroInit(c.WGPUSurfaceConfiguration, .{
             .device = self.device,
