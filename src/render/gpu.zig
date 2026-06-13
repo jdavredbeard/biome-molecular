@@ -46,6 +46,9 @@ pub const Gpu = struct {
     bond_ibuf: c.WGPUBuffer = null,
     bond_count: u32 = 0,
 
+    marker_ibuf: c.WGPUBuffer = null,
+    marker_count: u32 = 0,
+
     pub fn init(window: win.Window) !Gpu {
         const instance = c.wgpuCreateInstance(null) orelse return error.NoInstance;
         const surface = window.createSurface(instance) orelse return error.NoSurface;
@@ -96,6 +99,7 @@ pub const Gpu = struct {
 
     /// Release all GPU resources, in reverse order of creation.
     pub fn deinit(self: *Gpu) void {
+        if (self.marker_ibuf != null) c.wgpuBufferRelease(self.marker_ibuf);
         if (self.bond_ibuf != null) c.wgpuBufferRelease(self.bond_ibuf);
         if (self.cyl_ibuf != null) c.wgpuBufferRelease(self.cyl_ibuf);
         if (self.cyl_vbuf != null) c.wgpuBufferRelease(self.cyl_vbuf);
@@ -268,6 +272,17 @@ pub const Gpu = struct {
         self.bond_count = @intCast(instances.len);
     }
 
+    pub fn uploadMarkers(self: *Gpu, instances: []const lib.scene.Instance) void {
+        if (self.marker_ibuf != null) c.wgpuBufferRelease(self.marker_ibuf);
+        if (instances.len == 0) {
+            self.marker_ibuf = null;
+            self.marker_count = 0;
+            return;
+        }
+        self.marker_ibuf = self.createBuffer(std.mem.sliceAsBytes(instances), c.WGPUBufferUsage_Vertex);
+        self.marker_count = @intCast(instances.len);
+    }
+
     pub fn setUniforms(self: *Gpu, view_proj: [16]f32, model_pre: [16]f32, light_dir: [3]f32, camera_pos: [3]f32) void {
         const u = Uniforms{
             .view_proj = view_proj,
@@ -350,6 +365,13 @@ pub const Gpu = struct {
                 c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.bond_ibuf, 0, c.WGPU_WHOLE_SIZE);
                 c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.cyl_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
                 c.wgpuRenderPassEncoderDrawIndexed(pass, self.cyl_index_count, self.bond_count, 0, 0, 0);
+            }
+
+            if (self.sphere_index_count > 0 and self.marker_count > 0) {
+                c.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, self.sphere_vbuf, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.marker_ibuf, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.sphere_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
+                c.wgpuRenderPassEncoderDrawIndexed(pass, self.sphere_index_count, self.marker_count, 0, 0, 0);
             }
         }
 
