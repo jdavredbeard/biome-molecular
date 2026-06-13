@@ -6,6 +6,7 @@ const c = win.c;
 /// Uniforms shared by all draws (must match the WGSL `Uniforms` block).
 pub const Uniforms = extern struct {
     view_proj: [16]f32,
+    model_pre: [16]f32,
     light_dir: [4]f32,
     camera_pos: [4]f32,
 };
@@ -229,9 +230,10 @@ pub const Gpu = struct {
         self.atom_count = @intCast(instances.len);
     }
 
-    pub fn setUniforms(self: *Gpu, view_proj: [16]f32, light_dir: [3]f32, camera_pos: [3]f32) void {
+    pub fn setUniforms(self: *Gpu, view_proj: [16]f32, model_pre: [16]f32, light_dir: [3]f32, camera_pos: [3]f32) void {
         const u = Uniforms{
             .view_proj = view_proj,
+            .model_pre = model_pre,
             .light_dir = .{ light_dir[0], light_dir[1], light_dir[2], 0 },
             .camera_pos = .{ camera_pos[0], camera_pos[1], camera_pos[2], 0 },
         };

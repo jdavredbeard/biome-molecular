@@ -1,5 +1,6 @@
 struct Uniforms {
     view_proj : mat4x4<f32>,
+    model_pre : mat4x4<f32>, // world-space pre-transform applied to every instance (turntable spin)
     light_dir : vec4<f32>,   // xyz = key light direction (world), w unused
     camera_pos : vec4<f32>,
 };
@@ -24,11 +25,12 @@ struct VsOut {
 
 @vertex
 fn vs_main(in : VsIn) -> VsOut {
-    let model = mat4x4<f32>(in.m0, in.m1, in.m2, in.m3);
+    let model = u.model_pre * mat4x4<f32>(in.m0, in.m1, in.m2, in.m3);
     let world = model * vec4<f32>(in.position, 1.0);
     var out : VsOut;
     out.clip = u.view_proj * world;
-    // Rotation-only normal transform is fine (uniform xz scale); normalize covers it.
+    // Normals transform with the full model (incl. turntable spin) so lighting,
+    // which is fixed in world space, shifts across the surface as it turns.
     out.world_normal = normalize((model * vec4<f32>(in.normal, 0.0)).xyz);
     out.color = in.color.rgb;
     return out;
