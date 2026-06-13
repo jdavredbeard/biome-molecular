@@ -1,0 +1,21 @@
+//! Biome: Molecular — headless core library root.
+//! Re-exports the public API and aggregates every module's tests.
+
+pub const math = @import("math.zig");
+pub const atom = @import("atom.zig");
+pub const bond = @import("bond.zig");
+pub const constants = @import("constants.zig");
+pub const geometry = @import("geometry.zig");
+pub const molecule = @import("molecule.zig");
+pub const physics = @import("physics.zig");
+
+test {
+    // Pull every module's tests into the `zig build test` run.
+    _ = math;
+    _ = atom;
+    _ = bond;
+    _ = constants;
+    _ = geometry;
+    _ = molecule;
+    _ = physics;
+}
