@@ -11,13 +11,13 @@ This repository currently contains:
   geometry, and the folding physics engine. Pure logic, fully unit-tested.
 - **Renderer** — a native macOS WebGPU renderer that draws molecules as lit
   spheres (atoms) and cylinders (bonds).
-- **Sandbox navigation** — the app opens on a single Tetra at the origin with
-  its open bond points shown as markers. You cycle the selected point with the
-  arrow keys and the molecule rotates to bring it to face the camera.
+- **Sandbox** — the app opens on a single Tetra at the origin. You navigate to
+  an atom, drill into one of its open bond points, and place a new atom there
+  with a live ghost preview; the molecule re-folds via the physics engine.
 
-Atom placement, the radial menu, and puzzle mode are planned for future work and
-are not yet implemented. (The earlier example-browser was a renderer
-stepping-stone; its molecule builders remain as test fixtures in `examples.zig`.)
+Puzzle mode is planned for future work. (The earlier example-browser was a
+renderer stepping-stone; its molecule builders remain as test fixtures in
+`examples.zig`.)
 
 ## Prerequisites
 
@@ -49,16 +49,20 @@ graphics dependencies.
 
 ## Controls
 
+Building a molecule is a two-level select, then place:
+
 | Input | Action |
 |-------|--------|
-| **Left / Right arrows** | Select the previous / next open bond point; the molecule rotates to bring it to face the camera |
-| **Escape** or **Cmd-W** | Quit |
-| Window close button | Quit |
+| **Arrow keys** | Select an **atom** — rotates the nearest atom in that screen direction to the front (the selected atom pulses) |
+| **D** | Drill into the selected atom's **open bond points** — cycles them (the active node pulses); an arrow returns to atom selection |
+| **S** | After D: enter **placement** (a translucent ghost atom appears and the molecule re-folds). Press **S** again to scroll the atom type to place |
+| **F** | Finalize placement (the ghost becomes a real atom) |
+| **A** | Cancel placement (remove the ghost; the molecule relaxes back) |
+| **Escape** / **Cmd-W** / close | Quit |
 
-The selected open bond point is shown as a larger, brighter, gently pulsing
-marker. The camera is fixed and frames the molecule; the molecule rotates
-(it doesn't orbit). Selecting a point slerps the molecule's orientation over
-~300 ms so the chosen point swings to the front.
+The camera is fixed and frames the molecule; the molecule rotates (it doesn't
+orbit). Placement swings to a 3/4 view; same-type atoms are drawn in slightly
+varied hues so duplicates are distinguishable.
 
 ## Project layout
 
