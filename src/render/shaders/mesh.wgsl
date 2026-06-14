@@ -20,7 +20,7 @@ struct VsIn {
 struct VsOut {
     @builtin(position) clip : vec4<f32>,
     @location(0) world_normal : vec3<f32>,
-    @location(1) color : vec3<f32>,
+    @location(1) color : vec4<f32>,
 };
 
 @vertex
@@ -32,7 +32,7 @@ fn vs_main(in : VsIn) -> VsOut {
     // Normals transform with the full model (incl. turntable spin) so lighting,
     // which is fixed in world space, shifts across the surface as it turns.
     out.world_normal = normalize((model * vec4<f32>(in.normal, 0.0)).xyz);
-    out.color = in.color.rgb;
+    out.color = in.color;
     return out;
 }
 
@@ -50,6 +50,6 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     let rim  = pow(max(dot(n, rim_dir), 0.0), 2.0) * vec3<f32>(0.6, 0.7, 1.0) * 0.6;
     let ambient = vec3<f32>(0.12, 0.12, 0.15);
 
-    let lit = in.color * (ambient + key + fill) + rim;
-    return vec4<f32>(lit, 1.0);
+    let lit = in.color.rgb * (ambient + key + fill) + rim;
+    return vec4<f32>(lit, in.color.a);
 }

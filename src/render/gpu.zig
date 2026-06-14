@@ -29,6 +29,7 @@ pub const Gpu = struct {
     height: u32,
 
     pipeline: c.WGPURenderPipeline = null,
+    pipeline_blend: c.WGPURenderPipeline = null,
     bind_group: c.WGPUBindGroup = null,
     uniform_buffer: c.WGPUBuffer = null,
     depth_texture: c.WGPUTexture = null,
@@ -48,6 +49,11 @@ pub const Gpu = struct {
 
     marker_ibuf: c.WGPUBuffer = null,
     marker_count: u32 = 0,
+
+    ghost_ibuf: c.WGPUBuffer = null,
+    ghost_count: u32 = 0,
+    ghost_bond_ibuf: c.WGPUBuffer = null,
+    ghost_bond_count: u32 = 0,
 
     pub fn init(window: win.Window) !Gpu {
         const instance = c.wgpuCreateInstance(null) orelse return error.NoInstance;
@@ -99,6 +105,8 @@ pub const Gpu = struct {
 
     /// Release all GPU resources, in reverse order of creation.
     pub fn deinit(self: *Gpu) void {
+        if (self.ghost_bond_ibuf != null) c.wgpuBufferRelease(self.ghost_bond_ibuf);
+        if (self.ghost_ibuf != null) c.wgpuBufferRelease(self.ghost_ibuf);
         if (self.marker_ibuf != null) c.wgpuBufferRelease(self.marker_ibuf);
         if (self.bond_ibuf != null) c.wgpuBufferRelease(self.bond_ibuf);
         if (self.cyl_ibuf != null) c.wgpuBufferRelease(self.cyl_ibuf);
@@ -108,6 +116,7 @@ pub const Gpu = struct {
         if (self.sphere_vbuf != null) c.wgpuBufferRelease(self.sphere_vbuf);
         if (self.bind_group != null) c.wgpuBindGroupRelease(self.bind_group);
         if (self.uniform_buffer != null) c.wgpuBufferRelease(self.uniform_buffer);
+        if (self.pipeline_blend != null) c.wgpuRenderPipelineRelease(self.pipeline_blend);
         if (self.pipeline != null) c.wgpuRenderPipelineRelease(self.pipeline);
         if (self.depth_view != null) c.wgpuTextureViewRelease(self.depth_view);
         if (self.depth_texture != null) c.wgpuTextureRelease(self.depth_texture);
@@ -231,6 +240,50 @@ pub const Gpu = struct {
         });
         self.pipeline = c.wgpuDeviceCreateRenderPipeline(self.device, &desc);
 
+        // Translucent variant: alpha blending, depth-test but no depth-write
+        // (so the ghost preview shows through and doesn't occlude). Reuses the
+        // same shader module, layout, and vertex buffer layouts.
+        const blend = c.WGPUBlendState{
+            .color = .{ .operation = c.WGPUBlendOperation_Add, .srcFactor = c.WGPUBlendFactor_SrcAlpha, .dstFactor = c.WGPUBlendFactor_OneMinusSrcAlpha },
+            .alpha = .{ .operation = c.WGPUBlendOperation_Add, .srcFactor = c.WGPUBlendFactor_One, .dstFactor = c.WGPUBlendFactor_OneMinusSrcAlpha },
+        };
+        const color_target_blend = std.mem.zeroInit(c.WGPUColorTargetState, .{
+            .format = self.format,
+            .blend = &blend,
+            .writeMask = c.WGPUColorWriteMask_All,
+        });
+        const frag_blend = std.mem.zeroInit(c.WGPUFragmentState, .{
+            .module = module,
+            .entryPoint = sv("fs_main"),
+            .targetCount = @as(usize, 1),
+            .targets = &color_target_blend,
+        });
+        const depth_blend = std.mem.zeroInit(c.WGPUDepthStencilState, .{
+            .format = c.WGPUTextureFormat_Depth24Plus,
+            .depthWriteEnabled = c.WGPUOptionalBool_False,
+            .depthCompare = c.WGPUCompareFunction_Less,
+            .stencilFront = std.mem.zeroInit(c.WGPUStencilFaceState, .{ .compare = c.WGPUCompareFunction_Always }),
+            .stencilBack = std.mem.zeroInit(c.WGPUStencilFaceState, .{ .compare = c.WGPUCompareFunction_Always }),
+        });
+        const desc_blend = std.mem.zeroInit(c.WGPURenderPipelineDescriptor, .{
+            .layout = layout,
+            .vertex = std.mem.zeroInit(c.WGPUVertexState, .{
+                .module = module,
+                .entryPoint = sv("vs_main"),
+                .bufferCount = @as(usize, 2),
+                .buffers = &vbls,
+            }),
+            .primitive = std.mem.zeroInit(c.WGPUPrimitiveState, .{
+                .topology = c.WGPUPrimitiveTopology_TriangleList,
+                .frontFace = c.WGPUFrontFace_CCW,
+                .cullMode = c.WGPUCullMode_None,
+            }),
+            .depthStencil = &depth_blend,
+            .multisample = std.mem.zeroInit(c.WGPUMultisampleState, .{ .count = 1, .mask = 0xFFFFFFFF }),
+            .fragment = &frag_blend,
+        });
+        self.pipeline_blend = c.wgpuDeviceCreateRenderPipeline(self.device, &desc_blend);
+
         self.uniform_buffer = c.wgpuDeviceCreateBuffer(self.device, &std.mem.zeroInit(c.WGPUBufferDescriptor, .{
             .usage = c.WGPUBufferUsage_Uniform | c.WGPUBufferUsage_CopyDst,
             .size = @as(u64, @sizeOf(Uniforms)),
@@ -281,6 +334,31 @@ pub const Gpu = struct {
         }
         self.marker_ibuf = self.createBuffer(std.mem.sliceAsBytes(instances), c.WGPUBufferUsage_Vertex);
         self.marker_count = @intCast(instances.len);
+    }
+
+    /// Translucent sphere instances (the placement ghost), drawn with the blend
+    /// pipeline after the opaque geometry.
+    pub fn uploadGhost(self: *Gpu, instances: []const lib.scene.Instance) void {
+        if (self.ghost_ibuf != null) c.wgpuBufferRelease(self.ghost_ibuf);
+        if (instances.len == 0) {
+            self.ghost_ibuf = null;
+            self.ghost_count = 0;
+            return;
+        }
+        self.ghost_ibuf = self.createBuffer(std.mem.sliceAsBytes(instances), c.WGPUBufferUsage_Vertex);
+        self.ghost_count = @intCast(instances.len);
+    }
+
+    /// Translucent cylinder instances (the placement ghost's bond).
+    pub fn uploadGhostBonds(self: *Gpu, instances: []const lib.scene.Instance) void {
+        if (self.ghost_bond_ibuf != null) c.wgpuBufferRelease(self.ghost_bond_ibuf);
+        if (instances.len == 0) {
+            self.ghost_bond_ibuf = null;
+            self.ghost_bond_count = 0;
+            return;
+        }
+        self.ghost_bond_ibuf = self.createBuffer(std.mem.sliceAsBytes(instances), c.WGPUBufferUsage_Vertex);
+        self.ghost_bond_count = @intCast(instances.len);
     }
 
     pub fn setUniforms(self: *Gpu, view_proj: [16]f32, model_pre: [16]f32, light_dir: [3]f32, camera_pos: [3]f32) void {
@@ -372,6 +450,29 @@ pub const Gpu = struct {
                 c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.marker_ibuf, 0, c.WGPU_WHOLE_SIZE);
                 c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.sphere_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
                 c.wgpuRenderPassEncoderDrawIndexed(pass, self.sphere_index_count, self.marker_count, 0, 0, 0);
+            }
+        }
+
+        // Translucent pass: the placement ghost (atom sphere + bond cylinder),
+        // after all opaque geometry.
+        if (self.pipeline_blend != null) {
+            const draw_ghost = self.sphere_index_count > 0 and self.ghost_count > 0;
+            const draw_ghost_bond = self.cyl_index_count > 0 and self.ghost_bond_count > 0;
+            if (draw_ghost or draw_ghost_bond) {
+                c.wgpuRenderPassEncoderSetPipeline(pass, self.pipeline_blend);
+                c.wgpuRenderPassEncoderSetBindGroup(pass, 0, self.bind_group, 0, null);
+                if (draw_ghost) {
+                    c.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, self.sphere_vbuf, 0, c.WGPU_WHOLE_SIZE);
+                    c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.ghost_ibuf, 0, c.WGPU_WHOLE_SIZE);
+                    c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.sphere_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
+                    c.wgpuRenderPassEncoderDrawIndexed(pass, self.sphere_index_count, self.ghost_count, 0, 0, 0);
+                }
+                if (draw_ghost_bond) {
+                    c.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, self.cyl_vbuf, 0, c.WGPU_WHOLE_SIZE);
+                    c.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, self.ghost_bond_ibuf, 0, c.WGPU_WHOLE_SIZE);
+                    c.wgpuRenderPassEncoderSetIndexBuffer(pass, self.cyl_ibuf, c.WGPUIndexFormat_Uint32, 0, c.WGPU_WHOLE_SIZE);
+                    c.wgpuRenderPassEncoderDrawIndexed(pass, self.cyl_index_count, self.ghost_bond_count, 0, 0, 0);
+                }
             }
         }
 
