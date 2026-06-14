@@ -18,6 +18,7 @@ pub const KEY_LEFT_SUPER = c.GLFW_KEY_LEFT_SUPER;
 pub const KEY_RIGHT_SUPER = c.GLFW_KEY_RIGHT_SUPER;
 pub const KEY_A = c.GLFW_KEY_A;
 pub const KEY_S = c.GLFW_KEY_S;
+pub const KEY_D = c.GLFW_KEY_D;
 pub const KEY_F = c.GLFW_KEY_F;
 
 pub const Window = struct {
