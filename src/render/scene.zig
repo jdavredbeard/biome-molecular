@@ -22,14 +22,77 @@ fn make(model: Mat4, color: [3]f32) Instance {
     return .{ .model = model.m, .color = .{ color[0], color[1], color[2], 1.0 } };
 }
 
+// Per-duplicate hue/value shifts so successive atoms of the same type look
+// distinctly different (not just brighter/darker). Ordinal 0 = exact base.
+const hue_shifts = [_]f32{ 0.0, 0.13, -0.17, 0.27, -0.31, 0.42, -0.46, 0.20 };
+const val_shifts = [_]f32{ 0.0, 0.12, -0.14, -0.07, 0.16, -0.18, 0.09, -0.05 };
+
+fn rgbToHsv(c: [3]f32) [3]f32 {
+    const r = c[0];
+    const g = c[1];
+    const b = c[2];
+    const max = @max(r, @max(g, b));
+    const min = @min(r, @min(g, b));
+    const d = max - min;
+    const v = max;
+    const s = if (max <= 1e-6) 0.0 else d / max;
+    var h: f32 = 0;
+    if (d > 1e-6) {
+        if (max == r) {
+            h = @mod((g - b) / d, 6.0);
+        } else if (max == g) {
+            h = (b - r) / d + 2.0;
+        } else {
+            h = (r - g) / d + 4.0;
+        }
+        h /= 6.0;
+        if (h < 0) h += 1.0;
+    }
+    return .{ h, s, v };
+}
+
+fn hsvToRgb(c: [3]f32) [3]f32 {
+    const h = c[0];
+    const s = c[1];
+    const v = c[2];
+    const i = @floor(h * 6.0);
+    const f = h * 6.0 - i;
+    const p = v * (1.0 - s);
+    const q = v * (1.0 - f * s);
+    const t = v * (1.0 - (1.0 - f) * s);
+    const sector = @as(i32, @intFromFloat(i)) ;
+    return switch (@mod(sector, 6)) {
+        0 => .{ v, t, p },
+        1 => .{ q, v, p },
+        2 => .{ p, v, t },
+        3 => .{ p, q, v },
+        4 => .{ t, p, v },
+        else => .{ v, p, q },
+    };
+}
+
+fn variedColor(base: [3]f32, ordinal: usize) [3]f32 {
+    if (ordinal == 0) return base;
+    var hsv = rgbToHsv(base);
+    hsv[0] = @mod(hsv[0] + hue_shifts[ordinal % hue_shifts.len] + 1.0, 1.0);
+    hsv[2] = std.math.clamp(hsv[2] * (1.0 + val_shifts[ordinal % val_shifts.len]), 0.0, 1.0);
+    return hsvToRgb(hsv);
+}
+
 /// One sphere instance per atom: translate to the atom, scale by its radius.
+/// Atoms of a type that already appears earlier get a slightly shifted shade so
+/// duplicates of the same type are visually distinguishable.
 pub fn atomInstances(allocator: std.mem.Allocator, mol: *const Molecule) ![]Instance {
     const atoms = mol.atoms.items;
     const out = try allocator.alloc(Instance, atoms.len);
+    var type_counts = [_]usize{0} ** 4;
     for (atoms, 0..) |atom, i| {
         const style = atom_style.styleFor(atom.atom_type);
+        const ordinal = type_counts[@intFromEnum(atom.atom_type)];
+        type_counts[@intFromEnum(atom.atom_type)] += 1;
+        const color = variedColor(style.color, ordinal);
         const model = Mat4.translation(atom.position).mul(Mat4.scale(Vec3.init(style.radius, style.radius, style.radius)));
-        out[i] = make(model, style.color);
+        out[i] = make(model, color);
     }
     return out;
 }
@@ -74,6 +137,7 @@ pub fn openPointInstances(allocator: std.mem.Allocator, mol: *const Molecule, se
     }
     return out;
 }
+
 
 /// Rotation mapping unit vector `from` onto the direction of `to`.
 fn rotationToward(from: Vec3, to: Vec3) Mat4 {
@@ -150,3 +214,21 @@ test "openPointInstances: one marker per open point, selected larger, offset pla
     const center = m0.mulPoint(Vec3.zero);
     try std.testing.expectApproxEqAbs(marker_offset, center.length(), 1e-4);
 }
+
+test "atomInstances: same-type atoms get distinguishable shades" {
+    var mol = Molecule.init(std.testing.allocator);
+    defer mol.deinit();
+    const a = try mol.addFirstAtom(.tetra);
+    _ = try mol.addAtom(a, Vec3.init(0, 0, 1), .tetra); // second tetra
+
+    const insts = try atomInstances(std.testing.allocator, &mol);
+    defer std.testing.allocator.free(insts);
+    // First of a type keeps the exact style color.
+    const base = atom_style.styleFor(.tetra).color;
+    try std.testing.expectApproxEqAbs(base[0], insts[0].color[0], 1e-6);
+    // The second tetra differs in at least one channel.
+    try std.testing.expect(insts[0].color[0] != insts[1].color[0] or
+        insts[0].color[1] != insts[1].color[1] or
+        insts[0].color[2] != insts[1].color[2]);
+}
+
