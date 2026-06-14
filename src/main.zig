@@ -129,74 +129,38 @@ pub fn main() !void {
 
         switch (mode) {
             .navigate => {
-                // Level 1: arrows directionally select the ATOM (rotates so its
-                // active node faces the camera).
+                // Level 1: an arrow turns the molecule in that direction and
+                // selects whichever atom reaches the front first.
                 if (open.items.len > 0 and (left_edge or right_edge or up_edge or down_edge)) {
                     node_active = false; // any arrow returns to atom-selection level
-                    var dx: f32 = 0;
-                    var dy: f32 = 0;
-                    if (left_edge) dx -= 1;
-                    if (right_edge) dx += 1;
-                    if (up_edge) dy += 1;
-                    if (down_edge) dy -= 1;
-                    const dlen = @sqrt(dx * dx + dy * dy);
-                    if (dlen > 0) {
-                        dx /= dlen;
-                        dy /= dlen;
-                        const com = mol.centerOfMass();
-                        // Candidate atoms = those with open points (dedup via first occurrence).
-                        var ids = std.ArrayList(usize).init(allocator);
-                        defer ids.deinit();
-                        var vps = std.ArrayList(Vec3).init(allocator);
-                        defer vps.deinit();
-                        for (open.items) |p| {
-                            var seen = false;
-                            for (ids.items) |id| {
-                                if (id == p.parent_atom) seen = true;
-                            }
-                            if (seen) continue;
-                            try ids.append(p.parent_atom);
-                            const ap = mol.atoms.items[p.parent_atom].position;
-                            try vps.append(q.rotateVec(ap.sub(com)));
+                    const press: nav.PressDir = if (left_edge) .left else if (right_edge) .right else if (up_edge) .up else .down;
+                    const com = mol.centerOfMass();
+                    // Candidate atoms with open points (dedup), in current view space.
+                    // Atoms at the center can't rotate to the front, so skip them.
+                    var ids = std.ArrayList(usize).init(allocator);
+                    defer ids.deinit();
+                    var vdirs = std.ArrayList(Vec3).init(allocator);
+                    defer vdirs.deinit();
+                    for (open.items) |p| {
+                        if (p.parent_atom == selected_atom) continue; // don't reselect the current atom
+                        var seen = false;
+                        for (ids.items) |id| {
+                            if (id == p.parent_atom) seen = true;
                         }
-                        var cur: usize = 0;
-                        for (ids.items, 0..) |id, i| {
-                            if (id == selected_atom) cur = i;
-                        }
-                        // Pick the atom in the pressed direction; if none lines up
-                        // (e.g. a colinear molecule viewed end-on), fall back to the
-                        // next/previous atom so an arrow always advances.
-                        const picked: ?usize = nav.directionalSelect(vps.items, cur, dx, dy) orelse blk: {
-                            if (ids.items.len <= 1) break :blk null;
-                            const cdir: nav.Direction = if (dx > 0 or dy > 0) .next else .prev;
-                            break :blk nav.cycle(cur, ids.items.len, cdir);
-                        };
-                        if (picked) |idx| {
-                            selected_atom = ids.items[idx];
-                            node_in_atom = 0;
-                            node_active = false;
-                            selected = flatIndexFor(open.items, selected_atom, node_in_atom) orelse selected;
-                            // Rotate the ATOM to the front about a fixed world axis
-                            // in the press direction (predictable: Left always turns
-                            // the molecule the same way), rather than a shortest arc.
-                            const rel = mol.atoms.items[selected_atom].position.sub(com);
-                            if (rel.length() > 1e-3) {
-                                const rd = q.rotateVec(rel.normalize());
-                                var axis: Vec3 = undefined;
-                                var angle: f32 = 0;
-                                if (@abs(dx) >= @abs(dy)) {
-                                    axis = Vec3.init(0, 1, 0); // yaw
-                                    angle = -std.math.atan2(rd.x, rd.z);
-                                } else {
-                                    axis = Vec3.init(1, 0, 0); // pitch
-                                    angle = std.math.atan2(rd.y, rd.z);
-                                }
-                                q_start = q;
-                                q_target = Quaternion.fromAxisAngle(axis, angle).mul(q);
-                                anim_start = std.time.milliTimestamp();
-                                animating = true;
-                            }
-                        }
+                        if (seen) continue;
+                        const rel = mol.atoms.items[p.parent_atom].position.sub(com);
+                        if (rel.length() < 1e-3) continue;
+                        try ids.append(p.parent_atom);
+                        try vdirs.append(q.rotateVec(rel.normalize()));
+                    }
+                    if (nav.nextAtomByRotation(vdirs.items, press)) |pick| {
+                        selected_atom = ids.items[pick.index];
+                        node_in_atom = 0;
+                        selected = flatIndexFor(open.items, selected_atom, node_in_atom) orelse selected;
+                        q_start = q;
+                        q_target = Quaternion.fromAxisAngle(pick.axis, pick.angle).mul(q);
+                        anim_start = std.time.milliTimestamp();
+                        animating = true;
                     }
                 }
                 // Level 2: D cycles the nodes on the selected atom.

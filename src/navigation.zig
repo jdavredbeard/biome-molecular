@@ -20,33 +20,50 @@ pub fn targetOrientation(dir: Vec3) Quaternion {
     return Quaternion.rotationBetween(dir, Vec3.init(0, 0, 1));
 }
 
-/// Cursor-like directional selection. `view_positions` are the open points'
-/// positions in the current view space (camera looks down -Z, so x = right,
-/// y = up). Starting from the `selected` point, pick the nearest other point
-/// lying in the pressed screen direction `(dx, dy)` (assumed unit). Off-axis
-/// candidates are penalized (cost = along + 2*perpendicular) so a press favors
-/// well-aligned neighbors. Returns null if nothing lies in that direction.
-pub fn directionalSelect(view_positions: []const Vec3, selected: usize, dx: f32, dy: f32) ?usize {
-    if (selected >= view_positions.len) return null;
-    const sel = view_positions[selected];
+pub const PressDir = enum { left, right, up, down };
+
+/// An atom to select plus the world-axis rotation that brings it to the front.
+pub const AtomPick = struct { index: usize, axis: Vec3, angle: f32 };
+
+fn wrap2pi(a: f32) f32 {
+    var x = @mod(a, 2.0 * std.math.pi);
+    if (x < 0) x += 2.0 * std.math.pi;
+    return x;
+}
+
+/// Given atoms by their view-space directions (each rotated by the current
+/// orientation; camera looks down -Z), pick the atom that first reaches the
+/// front (+Z) as the molecule rotates in the pressed direction, and the
+/// world-axis rotation amount to bring it there. Left/Right rotate about the
+/// vertical (yaw); Up/Down about the horizontal (pitch). Atoms already at the
+/// front (amount ~ 0) are skipped, so selection and rotation stay consistent
+/// (press Left -> molecule turns one way -> the next atom in line is selected).
+/// Returns null if nothing qualifies.
+pub fn nextAtomByRotation(view_dirs: []const Vec3, press: PressDir) ?AtomPick {
+    const eps: f32 = 1e-3;
+    const axis = switch (press) {
+        .left => Vec3.init(0, 1, 0),
+        .right => Vec3.init(0, -1, 0),
+        .up => Vec3.init(1, 0, 0),
+        .down => Vec3.init(-1, 0, 0),
+    };
     var best: ?usize = null;
-    var best_cost: f32 = std.math.inf(f32);
-    for (view_positions, 0..) |p, i| {
-        if (i == selected) continue;
-        const ex = p.x - sel.x;
-        const ey = p.y - sel.y;
-        const along = ex * dx + ey * dy;
-        if (along <= 1e-4) continue; // not in the pressed direction
-        const px = ex - dx * along;
-        const py = ey - dy * along;
-        const perp = @sqrt(px * px + py * py);
-        const cost = along + 2.0 * perp;
-        if (cost < best_cost) {
-            best_cost = cost;
+    var best_amount: f32 = std.math.inf(f32);
+    for (view_dirs, 0..) |rd, i| {
+        const amount = switch (press) {
+            .left => wrap2pi(-std.math.atan2(rd.x, rd.z)),
+            .right => wrap2pi(std.math.atan2(rd.x, rd.z)),
+            .up => wrap2pi(std.math.atan2(rd.y, rd.z)),
+            .down => wrap2pi(-std.math.atan2(rd.y, rd.z)),
+        };
+        if (amount < eps) continue;
+        if (amount < best_amount) {
+            best_amount = amount;
             best = i;
         }
     }
-    return best;
+    if (best) |b| return .{ .index = b, .axis = axis, .angle = best_amount };
+    return null;
 }
 
 test "cycle wraps next and prev (incl. len 1)" {
@@ -64,19 +81,27 @@ test "targetOrientation brings a direction to +Z" {
     try std.testing.expect(q.rotateVec(dir).approxEq(Vec3.init(0, 0, 1), 1e-5));
 }
 
-test "directionalSelect picks the nearest in-direction point from the selected one" {
-    const vps = [_]Vec3{
-        Vec3.init(0, 0, 0), // 0: selected (center)
-        Vec3.init(0, 2, 0), // 1: up, near
-        Vec3.init(1, 0.1, 0), // 2: right
-        Vec3.init(0, -2, 0), // 3: down
-        Vec3.init(0, 5, 0), // 4: up, far
+test "nextAtomByRotation picks the atom that reaches front first in the press direction" {
+    const dirs = [_]Vec3{
+        Vec3.init(0, 0, 1), // 0: at front (skipped)
+        Vec3.init(-0.2, 0, 0.98), // 1: slightly left
+        Vec3.init(0.5, 0, 0.86), // 2: right
+        Vec3.init(-0.9, 0, -0.4), // 3: far left/back
     };
-    try std.testing.expectEqual(@as(?usize, 1), directionalSelect(&vps, 0, 0, 1)); // up -> nearer up node
-    try std.testing.expectEqual(@as(?usize, 2), directionalSelect(&vps, 0, 1, 0)); // right
-    try std.testing.expectEqual(@as(?usize, 3), directionalSelect(&vps, 0, 0, -1)); // down
-    // From the near-up node, pressing down returns toward center (nearer than the down node).
-    try std.testing.expectEqual(@as(?usize, 0), directionalSelect(&vps, 1, 0, -1));
-    // Nothing to the left of center.
-    try std.testing.expectEqual(@as(?usize, null), directionalSelect(&vps, 0, -1, 0));
+    // Left turns the molecule so left atoms come to front first -> the near-left one.
+    try std.testing.expectEqual(@as(usize, 1), nextAtomByRotation(&dirs, .left).?.index);
+    // Right brings the right atom first.
+    try std.testing.expectEqual(@as(usize, 2), nextAtomByRotation(&dirs, .right).?.index);
+
+    const vdirs = [_]Vec3{
+        Vec3.init(0, 0, 1), // front
+        Vec3.init(0, 0.2, 0.98), // up
+        Vec3.init(0, -0.5, 0.86), // down
+    };
+    try std.testing.expectEqual(@as(usize, 1), nextAtomByRotation(&vdirs, .up).?.index);
+    try std.testing.expectEqual(@as(usize, 2), nextAtomByRotation(&vdirs, .down).?.index);
+
+    // Only a front-facing atom -> nothing to rotate to.
+    const one = [_]Vec3{Vec3.init(0, 0, 1)};
+    try std.testing.expect(nextAtomByRotation(&one, .left) == null);
 }
